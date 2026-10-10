@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Tic Tac Toe</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -23,9 +23,10 @@
     <section class="card setup" id="setup-screen">
       <div class="field">
         <span class="field-label">Mode</span>
-        <div class="segmented" role="radiogroup" aria-label="Game mode">
-          <button class="seg-btn active" data-mode="bot" role="radio" aria-checked="true">🤖 vs Bot</button>
-          <button class="seg-btn" data-mode="friend" role="radio" aria-checked="false">👥 vs Friend</button>
+        <div class="segmented modes" role="radiogroup" aria-label="Game mode">
+          <button class="seg-btn active" data-mode="bot" role="radio" aria-checked="true">🤖 Bot</button>
+          <button class="seg-btn" data-mode="friend" role="radio" aria-checked="false">👥 Same phone</button>
+          <button class="seg-btn" data-mode="online" role="radio" aria-checked="false" id="online-mode-btn" hidden>🌐 Online</button>
         </div>
       </div>
 
@@ -55,7 +56,40 @@
         </div>
       </div>
 
+      <p class="hint" id="online-hint" hidden>Create a game and send your friend the invite link. You'll each play on your own phone.</p>
+
       <button class="primary-btn" id="start-btn">Start game</button>
+
+      <div class="join" id="join-field" hidden>
+        <div class="divider"><span>or join a friend's game</span></div>
+        <div class="join-row">
+          <input class="text-input code-input" id="join-code" type="text" maxlength="5" placeholder="CODE" autocapitalize="characters" autocomplete="off" spellcheck="false" aria-label="Game code">
+          <button class="ghost-btn" id="join-btn">Join</button>
+        </div>
+      </div>
+
+      <p class="error" id="online-error" role="alert" hidden></p>
+    </section>
+
+    <!-- Online lobby -->
+    <section class="card lobby" id="lobby-screen" hidden>
+      <div class="lobby-head">
+        <span class="pulse" aria-hidden="true"></span>
+        <p class="lobby-status">Waiting for your friend to join…</p>
+      </div>
+      <div class="field">
+        <span class="field-label">Game code</span>
+        <p class="code" id="lobby-code">-----</p>
+      </div>
+      <div class="field">
+        <span class="field-label">Invite link</span>
+        <p class="invite-link" id="invite-link"></p>
+        <p class="hint">Send this link to your friend. They can also choose Online and type the code. Only people you've shared this page with can open it.</p>
+      </div>
+      <div class="lobby-actions">
+        <button class="primary-btn" id="copy-btn">Copy invite link</button>
+        <button class="ghost-btn" id="cancel-btn">Cancel</button>
+      </div>
     </section>
 
     <!-- Game screen -->

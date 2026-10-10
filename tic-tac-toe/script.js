@@ -15,11 +15,19 @@
 
   const BOT_DELAY_MS = 450;
 
+  // Online play runs on the page's Claude artifact: each game is one shared
+  // document, games/<CODE>, that both players watch and write.
+  const ARTIFACT_URL = "https://claude.ai/artifact/LYpAW1Bt53d2meFLGnZpMo";
+  const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  const CODE_LENGTH = 5;
+  const CODE_PATTERN = new RegExp(`^[${CODE_ALPHABET}]{${CODE_LENGTH}}$`);
+
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
   const els = {
     setup: $("#setup-screen"),
+    lobby: $("#lobby-screen"),
     game: $("#game-screen"),
     difficultyField: $("#difficulty-field"),
     difficultyHint: $("#difficulty-hint"),
@@ -27,6 +35,16 @@
     namesField: $("#names-field"),
     nameX: $("#name-x"),
     nameO: $("#name-o"),
+    onlineModeBtn: $("#online-mode-btn"),
+    onlineHint: $("#online-hint"),
+    joinField: $("#join-field"),
+    joinCode: $("#join-code"),
+    joinBtn: $("#join-btn"),
+    startBtn: $("#start-btn"),
+    onlineError: $("#online-error"),
+    lobbyCode: $("#lobby-code"),
+    inviteLink: $("#invite-link"),
+    copyBtn: $("#copy-btn"),
     board: $("#board"),
     cells: $$(".cell"),
     status: $("#status"),
@@ -49,11 +67,25 @@
     board: Array(9).fill(null),
     turn: "X",
     starter: "X",
-    over: false,
     scores: { X: 0, O: 0, draw: 0 },
     names: { X: "You", O: "Bot" },
     botTimer: null,
   };
+
+  const online = {
+    db: null,
+    user: null,
+    myId: null,
+    code: "",
+    ref: null,
+    unsubscribe: null,
+    game: null, // last snapshot of games/<code>
+    side: null, // "X" | "O"
+    names: {}, // user id -> display name, resolved per viewer
+    writing: Promise.resolve(),
+  };
+
+  let shownWinKey = "";
 
   /* ---------- Game logic ---------- */
 
@@ -70,6 +102,8 @@
   const emptyCells = (board) => board.reduce((acc, v, i) => (v ? acc : [...acc, i]), []);
   const other = (p) => (p === "X" ? "O" : "X");
   const randomItem = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const boardOver = (board) => Boolean(getWinner(board)) || emptyCells(board).length === 0;
+  const isOver = () => boardOver(state.board);
 
   // Returns a move that immediately wins for `player`, or -1.
   function findWinningMove(board, player) {
@@ -140,9 +174,33 @@
 
   /* ---------- Rendering ---------- */
 
+  const isOnline = () => settings.mode === "online";
+  const friendSide = () => other(online.side);
+  const friendName = () => {
+    const id = online.game && online.game.players && online.game.players[friendSide()];
+    return (id && online.names[id]) || "Friend";
+  };
+
+  function isBotTurn() {
+    return settings.mode === "bot" && state.turn !== settings.humanSide;
+  }
+
+  function isLocked() {
+    if (isOver() || isBotTurn()) return true;
+    if (isOnline()) return state.turn !== online.side;
+    return false;
+  }
+
+  function displayName(side) {
+    if (isOnline()) return side === online.side ? "You" : friendName();
+    return state.names[side];
+  }
+
   function renderCell(i) {
     const cell = els.cells[i];
-    const value = state.board[i];
+    const value = state.board[i] || "";
+    if (cell.dataset.mark === value) return; // unchanged; keep its animation state
+    cell.dataset.mark = value;
     cell.className = "cell";
     cell.innerHTML = "";
     if (value) {
@@ -156,39 +214,20 @@
     }
   }
 
-  function isBotTurn() {
-    return settings.mode === "bot" && state.turn !== settings.humanSide;
-  }
-
-  function updateInteractivity() {
-    const locked = state.over || isBotTurn();
-    els.cells.forEach((cell, i) => {
-      cell.disabled = locked || Boolean(state.board[i]);
-    });
-    els.board.dataset.turn = locked ? "" : state.turn;
-    els.board.classList.toggle("over", state.over);
-    els.scoreCardX.classList.toggle("turn", !state.over && state.turn === "X");
-    els.scoreCardO.classList.toggle("turn", !state.over && state.turn === "O");
-  }
-
-  function setStatus(text, isWin = false) {
-    els.status.textContent = text;
-    els.status.classList.toggle("win", isWin);
-  }
-
-  function turnStatus() {
-    if (settings.mode === "bot") {
-      return isBotTurn() ? "Bot is thinking…" : "Your turn";
+  function statusText(win) {
+    if (win) {
+      if (settings.mode === "bot") {
+        return win.player === settings.humanSide ? "You win! 🎉" : "Bot wins. Try again!";
+      }
+      if (isOnline()) {
+        return win.player === online.side ? "You win! 🎉" : `${friendName()} wins this round`;
+      }
+      return `${state.names[win.player]} wins! 🎉`;
     }
+    if (emptyCells(state.board).length === 0) return "It's a draw 🤝";
+    if (settings.mode === "bot") return isBotTurn() ? "Bot is thinking…" : "Your turn";
+    if (isOnline()) return state.turn === online.side ? "Your turn" : `Waiting for ${friendName()}…`;
     return `${state.names[state.turn]}'s turn (${state.turn})`;
-  }
-
-  function renderScores() {
-    els.scoreX.textContent = state.scores.X;
-    els.scoreO.textContent = state.scores.O;
-    els.scoreDraw.textContent = state.scores.draw;
-    els.scoreNameX.textContent = `${state.names.X} (X)`;
-    els.scoreNameO.textContent = `${state.names.O} (O)`;
   }
 
   function drawWinLine(line) {
@@ -207,45 +246,62 @@
     els.winLine.classList.add("show");
   }
 
-  /* ---------- Turn flow ---------- */
-
-  function play(index) {
-    if (state.over || state.board[index]) return;
-
-    state.board[index] = state.turn;
-    renderCell(index);
-
+  function render() {
     const win = getWinner(state.board);
-    if (win) {
-      state.over = true;
-      state.scores[win.player] += 1;
-      win.line.forEach((i) => els.cells[i].classList.add("win-cell"));
-      drawWinLine(win.line);
-      if (settings.mode === "bot") {
-        setStatus(win.player === settings.humanSide ? "You win! 🎉" : "Bot wins. Try again!", win.player === settings.humanSide);
-      } else {
-        setStatus(`${state.names[win.player]} wins! 🎉`, true);
-      }
-    } else if (emptyCells(state.board).length === 0) {
-      state.over = true;
-      state.scores.draw += 1;
-      setStatus("It's a draw 🤝");
-    } else {
-      state.turn = other(state.turn);
-      setStatus(turnStatus());
+    const over = isOver();
+
+    els.cells.forEach((_, i) => renderCell(i));
+    els.cells.forEach((cell, i) => cell.classList.toggle("win-cell", Boolean(win && win.line.includes(i))));
+
+    const winKey = win ? win.line.join("") : "";
+    if (winKey !== shownWinKey) {
+      shownWinKey = winKey;
+      if (win) drawWinLine(win.line);
+      else els.winLine.classList.remove("show");
     }
 
-    renderScores();
-    updateInteractivity();
+    const mine = isOnline() ? online.side : settings.humanSide;
+    const youWon = win && (settings.mode === "friend" || win.player === mine);
+    els.status.textContent = statusText(win);
+    els.status.classList.toggle("win", Boolean(youWon));
+
+    els.scoreX.textContent = state.scores.X;
+    els.scoreO.textContent = state.scores.O;
+    els.scoreDraw.textContent = state.scores.draw;
+    els.scoreNameX.textContent = `${displayName("X")} (X)`;
+    els.scoreNameO.textContent = `${displayName("O")} (O)`;
+
+    const locked = isLocked();
+    els.cells.forEach((cell, i) => {
+      cell.disabled = locked || Boolean(state.board[i]);
+    });
+    els.board.dataset.turn = locked ? "" : state.turn;
+    els.board.classList.toggle("over", over);
+    els.scoreCardX.classList.toggle("turn", !over && state.turn === "X");
+    els.scoreCardO.classList.toggle("turn", !over && state.turn === "O");
+  }
+
+  /* ---------- Turn flow (bot and same phone) ---------- */
+
+  function play(index) {
+    if (isOver() || state.board[index]) return;
+
+    state.board[index] = state.turn;
+    const win = getWinner(state.board);
+    if (win) state.scores[win.player] += 1;
+    else if (emptyCells(state.board).length === 0) state.scores.draw += 1;
+    else state.turn = other(state.turn);
+
+    render();
     maybeBotMove();
   }
 
   function maybeBotMove() {
-    if (state.over || !isBotTurn()) return;
+    if (isOver() || !isBotTurn()) return;
     clearTimeout(state.botTimer);
     state.botTimer = setTimeout(() => {
       state.botTimer = null;
-      if (state.over || !isBotTurn()) return;
+      if (isOver() || !isBotTurn()) return;
       play(chooseBotMove(state.board, state.turn, settings.difficulty));
     }, BOT_DELAY_MS);
   }
@@ -254,19 +310,25 @@
     clearTimeout(state.botTimer);
     state.botTimer = null;
     state.board = Array(9).fill(null);
-    state.over = false;
-    // In friend mode the starting player alternates each round; vs bot, X always opens.
-    state.turn = settings.mode === "friend" ? state.starter : "X";
-    if (settings.mode === "friend") state.starter = other(state.starter);
-
-    els.winLine.classList.remove("show");
-    els.cells.forEach((_, i) => renderCell(i));
-    setStatus(turnStatus());
-    updateInteractivity();
+    // In same-phone games the starting player alternates each round; vs bot, X always opens.
+    if (settings.mode === "bot") {
+      state.turn = "X";
+    } else {
+      state.turn = state.starter;
+      state.starter = other(state.starter);
+    }
+    render();
     maybeBotMove();
   }
 
-  function startGame() {
+  function showScreen(screen) {
+    els.setup.hidden = screen !== "setup";
+    els.lobby.hidden = screen !== "lobby";
+    els.game.hidden = screen !== "game";
+    els.footer.hidden = screen !== "game";
+  }
+
+  function startLocalGame() {
     if (settings.mode === "bot") {
       state.names[settings.humanSide] = "You";
       state.names[other(settings.humanSide)] = "Bot";
@@ -275,47 +337,293 @@
     } else {
       state.names.X = els.nameX.value.trim() || "Player 1";
       state.names.O = els.nameO.value.trim() || "Player 2";
-      els.footerMode.textContent = "vs Friend";
+      els.footerMode.textContent = "Same phone";
     }
     state.scores = { X: 0, O: 0, draw: 0 };
     state.starter = "X";
-    renderScores();
-
-    els.setup.hidden = true;
-    els.game.hidden = false;
-    els.footer.hidden = false;
+    showScreen("game");
     newRound();
   }
 
   function showMenu() {
+    leaveOnline();
     clearTimeout(state.botTimer);
     state.botTimer = null;
-    els.game.hidden = true;
-    els.setup.hidden = false;
-    els.footer.hidden = true;
+    showScreen("setup");
+  }
+
+  /* ---------- Online play ---------- */
+
+  // Round r is opened by X when r is even and by O when it is odd, so both
+  // players compute the same next round even if they tap New round together.
+  const openerOf = (round) => (round % 2 === 0 ? "X" : "O");
+  const inviteUrl = () => `${ARTIFACT_URL}#${online.code}`;
+
+  function randomCode() {
+    let code = "";
+    for (let i = 0; i < CODE_LENGTH; i++) code += randomItem(CODE_ALPHABET.split(""));
+    return code;
+  }
+
+  function showOnlineError(message) {
+    els.onlineError.textContent = message;
+    els.onlineError.hidden = !message;
+  }
+
+  function setBusy(busy, label) {
+    els.startBtn.disabled = busy;
+    els.joinBtn.disabled = busy;
+    els.joinBtn.textContent = label || "Join";
+  }
+
+  // Writes to the game document go one at a time, in order.
+  function writeGame(fields) {
+    const ref = online.ref;
+    online.writing = online.writing
+      .then(() => ref && ref.update(fields))
+      .catch((err) => {
+        if (online.ref !== ref) return;
+        els.status.textContent = err && err.code === "invalid_argument"
+          ? "You don't have permission to play online. Ask the owner to share this page with you as an Editor."
+          : "Couldn't save that move. Check your connection and try again.";
+      });
+    return online.writing;
+  }
+
+  function applyGame(game) {
+    const board = Array.isArray(game.board) ? game.board : [];
+    state.board = Array.from({ length: 9 }, (_, i) => (board[i] === "X" || board[i] === "O" ? board[i] : null));
+    state.turn = game.turn === "O" ? "O" : "X";
+    const s = game.scores || {};
+    state.scores = { X: Number(s.X) || 0, O: Number(s.O) || 0, draw: Number(s.draw) || 0 };
+  }
+
+  async function resolveNames(game) {
+    const ids = Object.values(game.players || {}).filter(Boolean);
+    if (!ids.length || !online.user) return;
+    const profiles = await online.user.profiles(ids);
+    let changed = false;
+    for (const id of ids) {
+      const name = (profiles[id] && profiles[id].name) || "";
+      const first = name.split(" ")[0];
+      if (first && online.names[id] !== first) {
+        online.names[id] = first;
+        changed = true;
+      }
+    }
+    if (changed && isOnline() && !els.game.hidden) render();
+  }
+
+  function handleSnapshot(snap) {
+    if (!snap.exists) {
+      const wasPlaying = !els.game.hidden || !els.lobby.hidden;
+      leaveOnline();
+      if (wasPlaying) {
+        showScreen("setup");
+        showOnlineError("That game has ended.");
+      }
+      return;
+    }
+    const game = snap.data();
+    online.game = game;
+    applyGame(game);
+    resolveNames(game);
+
+    if (!game.players || !game.players.O) {
+      showScreen("lobby");
+      return;
+    }
+    showScreen("game");
+    render();
+  }
+
+  function watchGame(code, side) {
+    online.code = code;
+    online.side = side;
+    online.ref = online.db.doc(`games/${code}`);
+    els.lobbyCode.textContent = code;
+    els.inviteLink.textContent = inviteUrl();
+    els.footerMode.textContent = `Online · code ${code}`;
+    online.unsubscribe = online.ref.onSnapshot(handleSnapshot, () => {
+      leaveOnline();
+      showScreen("setup");
+      showOnlineError("Lost the connection to this game. Join again with the same code.");
+    });
+  }
+
+  function leaveOnline() {
+    if (online.unsubscribe) online.unsubscribe();
+    online.unsubscribe = null;
+    online.ref = null;
+    online.game = null;
+    online.side = null;
+    setBusy(false);
+  }
+
+  async function createOnlineGame() {
+    leaveOnline();
+    showOnlineError("");
+    setBusy(true);
+    try {
+      let code = randomCode();
+      for (let i = 0; i < 5 && (await online.db.doc(`games/${code}`).get()).exists; i++) code = randomCode();
+      await online.db.doc(`games/${code}`).set({
+        board: Array(9).fill(""),
+        turn: "X",
+        round: 0,
+        scores: { X: 0, O: 0, draw: 0 },
+        players: { X: online.myId, O: "" },
+        createdAt: Date.now(),
+      });
+      setBusy(false);
+      watchGame(code, "X");
+      showScreen("lobby");
+    } catch (err) {
+      setBusy(false);
+      showOnlineError(err && err.code === "invalid_argument"
+        ? "You can't create online games on this page. Ask the owner to share it with you as an Editor."
+        : "Couldn't create a game. Check your connection and try again.");
+    }
+  }
+
+  async function joinOnlineGame(rawCode) {
+    const code = String(rawCode || "").trim().toUpperCase();
+    if (!CODE_PATTERN.test(code)) {
+      showOnlineError(`Enter the ${CODE_LENGTH}-character code your friend sent you.`);
+      return;
+    }
+    leaveOnline();
+    showOnlineError("");
+    setBusy(true, "Joining…");
+    try {
+      const ref = online.db.doc(`games/${code}`);
+      let snap = await ref.get();
+      if (!snap.exists) throw new Error("not_found");
+      let players = snap.data().players || {};
+
+      if (players.X !== online.myId && players.O !== online.myId) {
+        if (players.O) throw new Error("full");
+        // Claim the O seat under a short lease so two people can't both take it.
+        const lease = await ref.acquire({ holder: online.myId, ttlMs: 5000 });
+        if (!lease.acquired) throw new Error("full");
+        snap = await ref.get();
+        players = (snap.exists && snap.data().players) || {};
+        if (players.O && players.O !== online.myId) throw new Error("full");
+        await ref.update({ players: { O: online.myId } });
+        players = { ...players, O: online.myId };
+      }
+
+      setBusy(false);
+      watchGame(code, players.X === online.myId ? "X" : "O");
+    } catch (err) {
+      setBusy(false);
+      const reason = err && (err.message || err.code);
+      showOnlineError(
+        reason === "not_found" ? `No game found with code ${code}. Check the code with your friend.`
+          : reason === "full" ? "That game already has two players."
+            : reason === "invalid_argument" ? "You can't join online games on this page. Ask the owner to share it with you as an Editor."
+              : "Couldn't join. Check your connection and try again.",
+      );
+    }
+  }
+
+  function playOnline(index) {
+    if (isLocked() || state.board[index]) return;
+    const board = state.board.slice();
+    board[index] = state.turn;
+    const scores = { ...state.scores };
+    const win = getWinner(board);
+    let turn = state.turn;
+    if (win) scores[win.player] += 1;
+    else if (emptyCells(board).length === 0) scores.draw += 1;
+    else turn = other(turn);
+
+    // Show the move straight away; the shared document confirms it.
+    state.board = board;
+    state.turn = turn;
+    state.scores = scores;
+    render();
+    writeGame({ board: board.map((v) => v || ""), turn, scores });
+  }
+
+  function newOnlineRound() {
+    if (!online.game || !boardOver(state.board)) return;
+    const round = (Number(online.game.round) || 0) + 1;
+    writeGame({ board: Array(9).fill(""), turn: openerOf(round), round });
+  }
+
+  async function cancelLobby() {
+    const { ref, game } = online;
+    leaveOnline();
+    showScreen("setup");
+    if (ref && game && !(game.players && game.players.O)) {
+      try { await ref.delete(); } catch { /* nothing to clean up */ }
+    }
+  }
+
+  async function copyInvite() {
+    try {
+      await navigator.clipboard.writeText(inviteUrl());
+      els.copyBtn.textContent = "Copied!";
+    } catch {
+      // Clipboard refused: select the link so it can be copied by hand.
+      const range = document.createRange();
+      range.selectNodeContents(els.inviteLink);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      els.copyBtn.textContent = "Select and copy the link";
+    }
+    setTimeout(() => { els.copyBtn.textContent = "Copy invite link"; }, 2000);
+  }
+
+  async function initOnline() {
+    if (!window.claude || typeof window.claude.use !== "function") return;
+    const [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
+    if (!db || !user) return;
+    const myId = await user.id();
+    if (!myId) return;
+    Object.assign(online, { db, user, myId });
+    els.onlineModeBtn.hidden = false;
+
+    // An invite link ends in #CODE: open straight into that game.
+    const invited = location.hash.replace(/^#/, "").toUpperCase();
+    if (CODE_PATTERN.test(invited)) {
+      selectSegment("mode", "online");
+      els.joinCode.value = invited;
+      joinOnlineGame(invited);
+    }
   }
 
   /* ---------- Setup controls ---------- */
 
+  const segmentHandlers = {};
+
+  function selectSegment(attr, value) {
+    $$(`[data-${attr}]`).forEach((b) => {
+      const on = b.dataset[attr] === value;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-checked", String(on));
+    });
+    segmentHandlers[attr](value);
+  }
+
   function bindSegmented(attr, onChange) {
-    const buttons = $$(`[data-${attr}]`);
-    buttons.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        buttons.forEach((b) => {
-          b.classList.toggle("active", b === btn);
-          b.setAttribute("aria-checked", String(b === btn));
-        });
-        onChange(btn.dataset[attr]);
-      });
+    segmentHandlers[attr] = onChange;
+    $$(`[data-${attr}]`).forEach((btn) => {
+      btn.addEventListener("click", () => selectSegment(attr, btn.dataset[attr]));
     });
   }
 
   bindSegmented("mode", (mode) => {
     settings.mode = mode;
-    const vsBot = mode === "bot";
-    els.difficultyField.hidden = !vsBot;
-    els.sideField.hidden = !vsBot;
-    els.namesField.hidden = vsBot;
+    els.difficultyField.hidden = mode !== "bot";
+    els.sideField.hidden = mode !== "bot";
+    els.namesField.hidden = mode !== "friend";
+    els.onlineHint.hidden = mode !== "online";
+    els.joinField.hidden = mode !== "online";
+    els.startBtn.textContent = mode === "online" ? "Create online game" : "Start game";
+    showOnlineError("");
   });
 
   bindSegmented("difficulty", (difficulty) => {
@@ -329,24 +637,51 @@
 
   els.cells.forEach((cell) => {
     cell.addEventListener("click", () => {
-      if (isBotTurn()) return;
-      play(Number(cell.dataset.index));
+      if (isLocked()) return;
+      const index = Number(cell.dataset.index);
+      if (isOnline()) playOnline(index);
+      else play(index);
     });
   });
 
-  $("#start-btn").addEventListener("click", startGame);
-  $("#restart-btn").addEventListener("click", newRound);
-  $("#menu-btn").addEventListener("click", showMenu);
+  els.startBtn.addEventListener("click", () => {
+    if (settings.mode === "online") createOnlineGame();
+    else startLocalGame();
+  });
+
+  $("#restart-btn").addEventListener("click", () => {
+    if (isOnline()) newOnlineRound();
+    else newRound();
+  });
+
   $("#reset-score-btn").addEventListener("click", () => {
-    state.scores = { X: 0, O: 0, draw: 0 };
-    renderScores();
+    if (isOnline()) {
+      writeGame({ scores: { X: 0, O: 0, draw: 0 } });
+    } else {
+      state.scores = { X: 0, O: 0, draw: 0 };
+      render();
+    }
+  });
+
+  $("#menu-btn").addEventListener("click", showMenu);
+  $("#cancel-btn").addEventListener("click", cancelLobby);
+  els.copyBtn.addEventListener("click", copyInvite);
+  els.joinBtn.addEventListener("click", () => joinOnlineGame(els.joinCode.value));
+
+  els.joinCode.addEventListener("input", () => {
+    els.joinCode.value = els.joinCode.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  });
+  els.joinCode.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") joinOnlineGame(els.joinCode.value);
   });
 
   [els.nameX, els.nameO].forEach((input) => {
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") startGame();
+      if (e.key === "Enter") startLocalGame();
     });
   });
+
+  initOnline();
 
   /* ---------- Theme ---------- */
 
