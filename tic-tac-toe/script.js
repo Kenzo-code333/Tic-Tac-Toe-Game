@@ -39,6 +39,7 @@
     scoreCardO: $("#score-card-o"),
     winLine: $("#win-line"),
     winLinePath: $("#win-line-path"),
+    footer: $("#footer"),
     footerMode: $("#footer-mode"),
   };
 
@@ -282,6 +283,7 @@
 
     els.setup.hidden = true;
     els.game.hidden = false;
+    els.footer.hidden = false;
     newRound();
   }
 
@@ -290,7 +292,7 @@
     state.botTimer = null;
     els.game.hidden = true;
     els.setup.hidden = false;
-    els.footerMode.textContent = "—";
+    els.footer.hidden = true;
   }
 
   /* ---------- Setup controls ---------- */
