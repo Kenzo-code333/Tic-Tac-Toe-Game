@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tic Tac Toe</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="app-header">
+      <h1 class="logo"><span class="logo-x">X</span><span class="logo-o">O</span> Tic Tac Toe</h1>
+      <button class="icon-btn" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </header>
+
+    <!-- Setup screen -->
+    <section class="card setup" id="setup-screen">
+      <div class="field">
+        <span class="field-label">Mode</span>
+        <div class="segmented" role="radiogroup" aria-label="Game mode">
+          <button class="seg-btn active" data-mode="bot" role="radio" aria-checked="true">🤖 vs Bot</button>
+          <button class="seg-btn" data-mode="friend" role="radio" aria-checked="false">👥 vs Friend</button>
+        </div>
+      </div>
+
+      <div class="field" id="difficulty-field">
+        <span class="field-label">Bot difficulty</span>
+        <div class="segmented three" role="radiogroup" aria-label="Bot difficulty">
+          <button class="seg-btn" data-difficulty="easy" role="radio" aria-checked="false">Easy</button>
+          <button class="seg-btn active" data-difficulty="medium" role="radio" aria-checked="true">Medium</button>
+          <button class="seg-btn" data-difficulty="hard" role="radio" aria-checked="false">Impossible</button>
+        </div>
+        <p class="hint" id="difficulty-hint">Blocks your wins, but slips up sometimes.</p>
+      </div>
+
+      <div class="field" id="side-field">
+        <span class="field-label">Play as</span>
+        <div class="segmented" role="radiogroup" aria-label="Your mark">
+          <button class="seg-btn active" data-side="X" role="radio" aria-checked="true"><span class="mark-x">X</span>&nbsp;goes first</button>
+          <button class="seg-btn" data-side="O" role="radio" aria-checked="false"><span class="mark-o">O</span>&nbsp;goes second</button>
+        </div>
+      </div>
+
+      <div class="field" id="names-field" hidden>
+        <span class="field-label">Player names</span>
+        <div class="names">
+          <label class="name-input"><span class="mark-x">X</span><input id="name-x" type="text" maxlength="14" placeholder="Player 1"></label>
+          <label class="name-input"><span class="mark-o">O</span><input id="name-o" type="text" maxlength="14" placeholder="Player 2"></label>
+        </div>
+      </div>
+
+      <button class="primary-btn" id="start-btn">Start game</button>
+    </section>
+
+    <!-- Game screen -->
+    <section class="game" id="game-screen" hidden>
+      <div class="scoreboard">
+        <div class="score score-x" id="score-card-x">
+          <span class="score-name" id="score-name-x">You</span>
+          <span class="score-value" id="score-x">0</span>
+        </div>
+        <div class="score score-draw">
+          <span class="score-name">Draws</span>
+          <span class="score-value" id="score-draw">0</span>
+        </div>
+        <div class="score score-o" id="score-card-o">
+          <span class="score-name" id="score-name-o">Bot</span>
+          <span class="score-value" id="score-o">0</span>
+        </div>
+      </div>
+
+      <p class="status" id="status" aria-live="polite">Your turn</p>
+
+      <div class="board-wrap">
+        <div class="board" id="board" role="grid" aria-label="Tic tac toe board">
+          <button class="cell" data-index="0" aria-label="Cell 1"></button>
+          <button class="cell" data-index="1" aria-label="Cell 2"></button>
+          <button class="cell" data-index="2" aria-label="Cell 3"></button>
+          <button class="cell" data-index="3" aria-label="Cell 4"></button>
+          <button class="cell" data-index="4" aria-label="Cell 5"></button>
+          <button class="cell" data-index="5" aria-label="Cell 6"></button>
+          <button class="cell" data-index="6" aria-label="Cell 7"></button>
+          <button class="cell" data-index="7" aria-label="Cell 8"></button>
+          <button class="cell" data-index="8" aria-label="Cell 9"></button>
+        </div>
+        <svg class="win-line" id="win-line" viewBox="0 0 300 300" preserveAspectRatio="none" aria-hidden="true">
+          <line id="win-line-path" x1="0" y1="0" x2="0" y2="0"/>
+        </svg>
+      </div>
+
+      <div class="actions">
+        <button class="ghost-btn" id="menu-btn">← Menu</button>
+        <button class="ghost-btn" id="reset-score-btn">Reset score</button>
+        <button class="primary-btn small" id="restart-btn">New round</button>
+      </div>
+    </section>
+
+    <footer class="footer">Mode: <span id="footer-mode">—</span></footer>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
