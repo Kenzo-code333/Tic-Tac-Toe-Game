@@ -29,6 +29,8 @@
   const els = {
     setup: $("#setup-screen"),
     lobby: $("#lobby-screen"),
+    joining: $("#joining-screen"),
+    joiningStatus: $("#joining-status"),
     game: $("#game-screen"),
     difficultyField: $("#difficulty-field"),
     difficultyHint: $("#difficulty-hint"),
@@ -347,6 +349,7 @@
   function showScreen(screen) {
     els.setup.hidden = screen !== "setup";
     els.lobby.hidden = screen !== "lobby";
+    els.joining.hidden = screen !== "joining";
     els.game.hidden = screen !== "game";
     els.footer.hidden = screen !== "game";
   }
@@ -369,6 +372,7 @@
 
   function showMenu() {
     leaveOnline();
+    clearInviteFromUrl();
     clearTimeout(state.botTimer);
     state.botTimer = null;
     showScreen("setup");
@@ -377,7 +381,7 @@
   /* ---------- Online play ---------- */
 
   const cleanName = (name) => String(name || "").trim().slice(0, 14);
-  const myOnlineName = () => cleanName(els.onlineName.value) || "Player";
+  const myOnlineName = () => cleanName(els.onlineName.value) || "Friend";
   const inviteUrl = () => `${location.origin}${location.pathname}?join=${online.code}`;
 
   function randomCode() {
@@ -560,6 +564,9 @@
     setBusy(true);
     if (rejoining) {
       els.status.textContent = "Reconnecting…";
+    } else {
+      els.joiningStatus.textContent = `Joining game ${code}…`;
+      showScreen("joining");
     }
 
     const fail = (message) => {
@@ -706,13 +713,20 @@
 
   try { els.onlineName.value = localStorage.getItem("ttt-name") || ""; } catch { /* storage unavailable */ }
 
-  // An invite link (?join=CODE) opens straight into the online join form.
-  const invitedCode = new URLSearchParams(location.search).get("join");
+  // Once a guest leaves, reloading the page shouldn't rejoin the old game.
+  function clearInviteFromUrl() {
+    if (!new URLSearchParams(location.search).has("join")) return;
+    try { history.replaceState(null, "", location.pathname + location.hash); } catch { /* not allowed here */ }
+  }
+
+  $("#joining-cancel-btn").addEventListener("click", showMenu);
+
+  // An invite link (?join=CODE) joins that game straight away.
+  const invitedCode = (new URLSearchParams(location.search).get("join") || "").toUpperCase().slice(0, CODE_LENGTH);
   if (invitedCode) {
     selectSegment("mode", "online");
-    els.joinCode.value = invitedCode.toUpperCase().slice(0, CODE_LENGTH);
-    els.onlineError.hidden = true;
-    (els.onlineName.value ? els.joinBtn : els.onlineName).focus();
+    els.joinCode.value = invitedCode;
+    joinOnlineGame(invitedCode);
   }
 
   /* ---------- Theme ---------- */
