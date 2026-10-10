@@ -313,7 +313,10 @@
     els.scoreCardX.classList.toggle("turn", !over && state.turn === "X");
     els.scoreCardO.classList.toggle("turn", !over && state.turn === "O");
 
-    els.restartBtn.textContent = isGuest() && !online.connected ? "Reconnect" : "New round";
+    // New round only unlocks once the round is over; Reconnect is always available.
+    const reconnect = isGuest() && !online.connected;
+    els.restartBtn.textContent = reconnect ? "Reconnect" : "New round";
+    els.restartBtn.disabled = !reconnect && !over;
   }
 
   /* ---------- Win and loss effects ---------- */
@@ -591,7 +594,7 @@
       } else if (msg.type === "move") {
         const index = Number(msg.index);
         if (state.turn === "O" && Number.isInteger(index) && index >= 0 && index < 9) play(index);
-      } else if (msg.type === "restart") {
+      } else if (msg.type === "restart" && isOver()) {
         newRound();
       } else if (msg.type === "reset") {
         resetScores();
