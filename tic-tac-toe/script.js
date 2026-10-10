@@ -15,12 +15,13 @@
 
   const BOT_DELAY_MS = 450;
 
-  // Online play runs on the page's Claude artifact: each game is one shared
-  // document, games/<CODE>, that both players watch and write.
-  const ARTIFACT_URL = "https://claude.ai/artifact/LYpAW1Bt53d2meFLGnZpMo";
+  // Online play: the host's PeerJS id is this prefix plus the game code.
+  const PEER_PREFIX = "kzttt-";
   const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
   const CODE_LENGTH = 5;
-  const CODE_PATTERN = new RegExp(`^[${CODE_ALPHABET}]{${CODE_LENGTH}}$`);
+  const JOIN_TIMEOUT_MS = 15000;
+  // Tests can point PeerJS at a local server by defining window.TTT_PEER_OPTIONS.
+  const PEER_OPTIONS = window.TTT_PEER_OPTIONS || {};
 
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
@@ -35,15 +36,16 @@
     namesField: $("#names-field"),
     nameX: $("#name-x"),
     nameO: $("#name-o"),
-    onlineModeBtn: $("#online-mode-btn"),
-    onlineHint: $("#online-hint"),
+    onlineNameField: $("#online-name-field"),
+    onlineName: $("#online-name"),
     joinField: $("#join-field"),
     joinCode: $("#join-code"),
     joinBtn: $("#join-btn"),
     startBtn: $("#start-btn"),
     onlineError: $("#online-error"),
     lobbyCode: $("#lobby-code"),
-    inviteLink: $("#invite-link"),
+    lobbyStatus: $("#lobby-status"),
+    shareBtn: $("#share-btn"),
     copyBtn: $("#copy-btn"),
     board: $("#board"),
     cells: $$(".cell"),
@@ -57,6 +59,7 @@
     scoreCardO: $("#score-card-o"),
     winLine: $("#win-line"),
     winLinePath: $("#win-line-path"),
+    restartBtn: $("#restart-btn"),
     footer: $("#footer"),
     footerMode: $("#footer-mode"),
   };
@@ -72,18 +75,15 @@
     botTimer: null,
   };
 
+  // The host is always X and holds the real game state; the guest is O and
+  // sends its moves to the host, which replies with the full state.
   const online = {
-    db: null,
-    user: null,
-    myId: null,
-    canWrite: null, // false when this viewer may only look, not play
+    peer: null,
+    conn: null,
+    role: null, // "host" | "guest"
     code: "",
-    ref: null,
-    unsubscribe: null,
-    game: null, // last snapshot of games/<code>
-    side: null, // "X" | "O"
-    names: {}, // user id -> display name, resolved per viewer
-    writing: Promise.resolve(),
+    connected: false,
+    joinTimer: null,
   };
 
   let shownWinKey = "";
@@ -103,8 +103,7 @@
   const emptyCells = (board) => board.reduce((acc, v, i) => (v ? acc : [...acc, i]), []);
   const other = (p) => (p === "X" ? "O" : "X");
   const randomItem = (arr) => arr[Math.floor(Math.random() * arr.length)];
-  const boardOver = (board) => Boolean(getWinner(board)) || emptyCells(board).length === 0;
-  const isOver = () => boardOver(state.board);
+  const isOver = () => Boolean(getWinner(state.board)) || emptyCells(state.board).length === 0;
 
   // Returns a move that immediately wins for `player`, or -1.
   function findWinningMove(board, player) {
@@ -176,11 +175,9 @@
   /* ---------- Rendering ---------- */
 
   const isOnline = () => settings.mode === "online";
-  const friendSide = () => other(online.side);
-  const friendName = () => {
-    const id = online.game && online.game.players && online.game.players[friendSide()];
-    return (id && online.names[id]) || "Friend";
-  };
+  const isGuest = () => isOnline() && online.role === "guest";
+  const mySide = () => (online.role === "guest" ? "O" : "X");
+  const friendName = () => state.names[other(mySide())] || "Friend";
 
   function isBotTurn() {
     return settings.mode === "bot" && state.turn !== settings.humanSide;
@@ -188,12 +185,12 @@
 
   function isLocked() {
     if (isOver() || isBotTurn()) return true;
-    if (isOnline()) return state.turn !== online.side;
+    if (isOnline()) return !online.connected || state.turn !== mySide();
     return false;
   }
 
   function displayName(side) {
-    if (isOnline()) return side === online.side ? "You" : friendName();
+    if (isOnline()) return side === mySide() ? "You" : friendName();
     return state.names[side];
   }
 
@@ -216,18 +213,23 @@
   }
 
   function statusText(win) {
+    if (isOnline() && !online.connected) {
+      return online.role === "host"
+        ? `${friendName()} disconnected. Waiting for them to rejoin…`
+        : "Connection lost. Tap Reconnect to rejoin.";
+    }
     if (win) {
       if (settings.mode === "bot") {
         return win.player === settings.humanSide ? "You win! 🎉" : "Bot wins. Try again!";
       }
       if (isOnline()) {
-        return win.player === online.side ? "You win! 🎉" : `${friendName()} wins this round`;
+        return win.player === mySide() ? "You win! 🎉" : `${friendName()} wins this round`;
       }
       return `${state.names[win.player]} wins! 🎉`;
     }
     if (emptyCells(state.board).length === 0) return "It's a draw 🤝";
     if (settings.mode === "bot") return isBotTurn() ? "Bot is thinking…" : "Your turn";
-    if (isOnline()) return state.turn === online.side ? "Your turn" : `Waiting for ${friendName()}…`;
+    if (isOnline()) return state.turn === mySide() ? "Your turn" : `Waiting for ${friendName()}…`;
     return `${state.names[state.turn]}'s turn (${state.turn})`;
   }
 
@@ -261,8 +263,7 @@
       else els.winLine.classList.remove("show");
     }
 
-    const mine = isOnline() ? online.side : settings.humanSide;
-    const youWon = win && (settings.mode === "friend" || win.player === mine);
+    const youWon = win && (settings.mode === "friend" || win.player === (isOnline() ? mySide() : settings.humanSide));
     els.status.textContent = statusText(win);
     els.status.classList.toggle("win", Boolean(youWon));
 
@@ -280,10 +281,14 @@
     els.board.classList.toggle("over", over);
     els.scoreCardX.classList.toggle("turn", !over && state.turn === "X");
     els.scoreCardO.classList.toggle("turn", !over && state.turn === "O");
+
+    els.restartBtn.textContent = isGuest() && !online.connected ? "Reconnect" : "New round";
   }
 
-  /* ---------- Turn flow (bot and same phone) ---------- */
+  /* ---------- Turn flow ---------- */
 
+  // Applies a move to the local state. Runs on this device for bot and
+  // same-phone games, and on the host for online games.
   function play(index) {
     if (isOver() || state.board[index]) return;
 
@@ -294,6 +299,7 @@
     else state.turn = other(state.turn);
 
     render();
+    sendState();
     maybeBotMove();
   }
 
@@ -311,7 +317,7 @@
     clearTimeout(state.botTimer);
     state.botTimer = null;
     state.board = Array(9).fill(null);
-    // In same-phone games the starting player alternates each round; vs bot, X always opens.
+    // With two people the starting player alternates each round; vs bot, X always opens.
     if (settings.mode === "bot") {
       state.turn = "X";
     } else {
@@ -319,7 +325,23 @@
       state.starter = other(state.starter);
     }
     render();
+    sendState();
     maybeBotMove();
+  }
+
+  function resetScores() {
+    state.scores = { X: 0, O: 0, draw: 0 };
+    render();
+    sendState();
+  }
+
+  function resetGameState() {
+    clearTimeout(state.botTimer);
+    state.botTimer = null;
+    state.scores = { X: 0, O: 0, draw: 0 };
+    state.starter = "X";
+    state.board = Array(9).fill(null);
+    state.turn = "X";
   }
 
   function showScreen(screen) {
@@ -340,8 +362,7 @@
       state.names.O = els.nameO.value.trim() || "Player 2";
       els.footerMode.textContent = "Same phone";
     }
-    state.scores = { X: 0, O: 0, draw: 0 };
-    state.starter = "X";
+    resetGameState();
     showScreen("game");
     newRound();
   }
@@ -355,10 +376,9 @@
 
   /* ---------- Online play ---------- */
 
-  // Round r is opened by X when r is even and by O when it is odd, so both
-  // players compute the same next round even if they tap New round together.
-  const openerOf = (round) => (round % 2 === 0 ? "X" : "O");
-  const inviteUrl = () => `${ARTIFACT_URL}#${online.code}`;
+  const cleanName = (name) => String(name || "").trim().slice(0, 14);
+  const myOnlineName = () => cleanName(els.onlineName.value) || "Player";
+  const inviteUrl = () => `${location.origin}${location.pathname}?join=${online.code}`;
 
   function randomCode() {
     let code = "";
@@ -371,227 +391,222 @@
     els.onlineError.hidden = !message;
   }
 
-  function setBusy(busy, label) {
+  function setBusy(busy) {
     els.startBtn.disabled = busy;
     els.joinBtn.disabled = busy;
-    els.joinBtn.textContent = label || "Join";
+    els.joinBtn.textContent = busy && online.role === "guest" ? "Joining…" : "Join";
   }
 
-  const NO_ACCESS = "You need Editor access to play online. Ask the person who shared this page with you to change your access to Editor.";
-
-  // Turns a storage refusal into a message that says what to do about it.
-  function describeError(err, fallback) {
-    const code = err && (err.reason || err.code);
-    switch (code) {
-      case "invalid_argument":
-      case "not_granted":
-      case "transform_error":
-        return NO_ACCESS;
-      case "revoked":
-        return "Your access to this page changed. Reload the page and try again.";
-      case "resource_exhausted":
-        return "Too many tries in a short time. Wait a few seconds and try again.";
-      case "quota_exceeded":
-        return "The game storage is full. Ask the page owner to clear old games.";
-      case "unavailable":
-        return "Couldn't reach the game storage. Wait a moment and try again.";
-      case "capability_disabled":
-      case "capability_removed":
-        return "Online play isn't available in this app. Open the invite link in Safari or Chrome instead.";
-      default:
-        return `${fallback} (${code || "unknown error"})`;
-    }
+  function rememberName() {
+    try { localStorage.setItem("ttt-name", els.onlineName.value.trim()); } catch { /* storage unavailable */ }
   }
 
-  const fail = (reason) => Object.assign(new Error(reason), { reason });
-
-  // Writes to the game document go one at a time, in order.
-  function writeGame(fields) {
-    const ref = online.ref;
-    online.writing = online.writing
-      .then(() => ref && ref.update(fields))
-      .catch((err) => {
-        if (online.ref !== ref) return;
-        els.status.textContent = describeError(err, "Couldn't save that move. Try again.");
-      });
-    return online.writing;
+  function peerAvailable() {
+    if (typeof window.Peer === "function") return true;
+    showOnlineError("Online play couldn't load. Check your internet connection and reload the page.");
+    return false;
   }
 
-  function applyGame(game) {
-    const board = Array.isArray(game.board) ? game.board : [];
-    state.board = Array.from({ length: 9 }, (_, i) => (board[i] === "X" || board[i] === "O" ? board[i] : null));
-    state.turn = game.turn === "O" ? "O" : "X";
-    const s = game.scores || {};
-    state.scores = { X: Number(s.X) || 0, O: Number(s.O) || 0, draw: Number(s.draw) || 0 };
-  }
-
-  async function resolveNames(game) {
-    const ids = Object.values(game.players || {}).filter(Boolean);
-    if (!ids.length || !online.user) return;
-    const profiles = await online.user.profiles(ids);
-    let changed = false;
-    for (const id of ids) {
-      const name = (profiles[id] && profiles[id].name) || "";
-      const first = name.split(" ")[0];
-      if (first && online.names[id] !== first) {
-        online.names[id] = first;
-        changed = true;
-      }
-    }
-    if (changed && isOnline() && !els.game.hidden) render();
-  }
-
-  function handleSnapshot(snap) {
-    if (!snap.exists) {
-      const wasPlaying = !els.game.hidden || !els.lobby.hidden;
-      leaveOnline();
-      if (wasPlaying) {
-        showScreen("setup");
-        showOnlineError("That game has ended.");
-      }
-      return;
-    }
-    const game = snap.data();
-    online.game = game;
-    applyGame(game);
-    resolveNames(game);
-
-    if (!game.players || !game.players.O) {
-      showScreen("lobby");
-      return;
-    }
-    showScreen("game");
-    render();
-  }
-
-  function watchGame(code, side) {
-    online.code = code;
-    online.side = side;
-    online.ref = online.db.doc(`games/${code}`);
-    els.lobbyCode.textContent = code;
-    els.inviteLink.textContent = inviteUrl();
-    els.footerMode.textContent = `Online · code ${code}`;
-    online.unsubscribe = online.ref.onSnapshot(handleSnapshot, () => {
-      leaveOnline();
-      showScreen("setup");
-      showOnlineError("Lost the connection to this game. Join again with the same code.");
+  function sendState() {
+    if (!isOnline() || online.role !== "host" || !online.conn || !online.conn.open) return;
+    online.conn.send({
+      type: "state",
+      board: state.board,
+      turn: state.turn,
+      starter: state.starter,
+      scores: state.scores,
+      names: state.names,
     });
   }
 
+  function send(message) {
+    if (online.conn && online.conn.open) online.conn.send(message);
+  }
+
   function leaveOnline() {
-    if (online.unsubscribe) online.unsubscribe();
-    online.unsubscribe = null;
-    online.ref = null;
-    online.game = null;
-    online.side = null;
+    clearTimeout(online.joinTimer);
+    const { peer } = online;
+    online.peer = null;
+    online.conn = null;
+    online.role = null;
+    online.connected = false;
+    if (peer) peer.destroy();
     setBusy(false);
   }
 
-  async function createOnlineGame() {
-    leaveOnline();
-    showOnlineError("");
-    if (online.canWrite === false) {
-      showOnlineError(NO_ACCESS);
-      return;
-    }
-    setBusy(true);
-    try {
-      let code = randomCode();
-      for (let i = 0; i < 5 && (await online.db.doc(`games/${code}`).get()).exists; i++) code = randomCode();
-      await online.db.doc(`games/${code}`).set({
-        board: Array(9).fill(""),
-        turn: "X",
-        round: 0,
-        scores: { X: 0, O: 0, draw: 0 },
-        players: { X: online.myId, O: "" },
-        createdAt: Date.now(),
-      });
-      setBusy(false);
-      watchGame(code, "X");
-      showScreen("lobby");
-    } catch (err) {
-      setBusy(false);
-      showOnlineError(describeError(err, "Couldn't create a game. Try again."));
-    }
+  function attachConnection(conn) {
+    online.conn = conn;
+    conn.on("data", (msg) => handleMessage(conn, msg));
+    const onClose = () => {
+      if (online.conn !== conn) return; // an older connection we already replaced
+      online.conn = null;
+      online.connected = false;
+      if (!els.game.hidden) render();
+    };
+    conn.on("close", onClose);
+    conn.on("error", onClose);
   }
 
-  async function joinOnlineGame(rawCode) {
-    const code = String(rawCode || "").trim().toUpperCase();
-    if (!CODE_PATTERN.test(code)) {
-      showOnlineError(`Enter the ${CODE_LENGTH}-character code your friend sent you.`);
-      return;
-    }
-    leaveOnline();
-    showOnlineError("");
-    if (online.canWrite === false) {
-      showOnlineError(NO_ACCESS);
-      return;
-    }
-    setBusy(true, "Joining…");
-    try {
-      const ref = online.db.doc(`games/${code}`);
-      let snap = await ref.get();
-      if (!snap.exists) throw fail("not_found");
-      let players = snap.data().players || {};
+  function handleMessage(conn, msg) {
+    if (!msg || typeof msg !== "object" || conn !== online.conn) return;
 
-      if (players.X !== online.myId && players.O !== online.myId) {
-        if (players.O) throw fail("full");
-        // Claim the O seat under a short lease so two people can't both take it.
-        // If the lease itself is refused, claim without it: a clash is very unlikely.
-        const lease = await ref.acquire({ holder: online.myId, ttlMs: 5000 }).catch(() => ({ acquired: true }));
-        if (!lease.acquired) throw fail("full");
-        snap = await ref.get();
-        players = (snap.exists && snap.data().players) || {};
-        if (players.O && players.O !== online.myId) throw fail("full");
-        await ref.update({ players: { O: online.myId } });
-        players = { ...players, O: online.myId };
+    if (online.role === "host") {
+      if (msg.type === "hello") {
+        state.names.O = cleanName(msg.name) || "Friend";
+        online.connected = true;
+        showScreen("game");
+        render();
+        sendState();
+      } else if (msg.type === "move") {
+        const index = Number(msg.index);
+        if (state.turn === "O" && Number.isInteger(index) && index >= 0 && index < 9) play(index);
+      } else if (msg.type === "restart") {
+        newRound();
+      } else if (msg.type === "reset") {
+        resetScores();
       }
+      return;
+    }
 
+    if (msg.type === "state" && Array.isArray(msg.board) && msg.board.length === 9) {
+      clearTimeout(online.joinTimer);
+      state.board = msg.board.map((v) => (v === "X" || v === "O" ? v : null));
+      state.turn = msg.turn === "O" ? "O" : "X";
+      state.starter = msg.starter === "O" ? "O" : "X";
+      const s = msg.scores || {};
+      state.scores = { X: Number(s.X) || 0, O: Number(s.O) || 0, draw: Number(s.draw) || 0 };
+      state.names = { X: cleanName(msg.names && msg.names.X) || "Friend", O: myOnlineName() };
+      online.connected = true;
       setBusy(false);
-      watchGame(code, players.X === online.myId ? "X" : "O");
-    } catch (err) {
-      setBusy(false);
-      const reason = err && err.reason;
-      showOnlineError(
-        reason === "not_found" ? `No game found with code ${code}. Check the code with your friend, and make sure their game is still on the waiting screen.`
-          : reason === "full" ? "That game already has two players."
-            : describeError(err, "Couldn't join. Try again."),
-      );
+      showScreen("game");
+      render();
+    } else if (msg.type === "full") {
+      leaveOnline();
+      showScreen("setup");
+      showOnlineError("That game already has two players.");
     }
   }
 
-  function playOnline(index) {
-    if (isLocked() || state.board[index]) return;
-    const board = state.board.slice();
-    board[index] = state.turn;
-    const scores = { ...state.scores };
-    const win = getWinner(board);
-    let turn = state.turn;
-    if (win) scores[win.player] += 1;
-    else if (emptyCells(board).length === 0) scores.draw += 1;
-    else turn = other(turn);
-
-    // Show the move straight away; the shared document confirms it.
-    state.board = board;
-    state.turn = turn;
-    state.scores = scores;
-    render();
-    writeGame({ board: board.map((v) => v || ""), turn, scores });
-  }
-
-  function newOnlineRound() {
-    if (!online.game || !boardOver(state.board)) return;
-    const round = (Number(online.game.round) || 0) + 1;
-    writeGame({ board: Array(9).fill(""), turn: openerOf(round), round });
-  }
-
-  async function cancelLobby() {
-    const { ref, game } = online;
+  function createOnlineGame(attempt = 1) {
+    if (!peerAvailable()) return;
     leaveOnline();
-    showScreen("setup");
-    if (ref && game && !(game.players && game.players.O)) {
-      try { await ref.delete(); } catch { /* nothing to clean up */ }
+    showOnlineError("");
+    rememberName();
+    resetGameState();
+    state.starter = "O"; // X opens the first round, then the opener alternates
+    state.names = { X: myOnlineName(), O: "Friend" };
+    online.role = "host";
+    online.code = randomCode();
+    setBusy(true);
+
+    const peer = new Peer(PEER_PREFIX + online.code, PEER_OPTIONS);
+    online.peer = peer;
+
+    peer.on("open", () => {
+      if (online.peer !== peer) return;
+      setBusy(false);
+      els.lobbyCode.textContent = online.code;
+      els.lobbyStatus.textContent = "Waiting for your friend to join…";
+      els.footerMode.textContent = `Online · code ${online.code}`;
+      showScreen("lobby");
+    });
+
+    peer.on("connection", (conn) => {
+      if (online.peer !== peer) return;
+      if (online.conn && online.conn.open) {
+        conn.on("open", () => {
+          conn.send({ type: "full" });
+          setTimeout(() => conn.close(), 500);
+        });
+        return;
+      }
+      attachConnection(conn); // first join, or the guest coming back after a drop
+    });
+
+    // Losing the matchmaking server doesn't end a game in progress; reconnect quietly.
+    peer.on("disconnected", () => {
+      if (online.peer === peer && !peer.destroyed) peer.reconnect();
+    });
+
+    peer.on("error", (err) => {
+      if (online.peer !== peer) return;
+      if (err.type === "unavailable-id" && attempt < 3) {
+        createOnlineGame(attempt + 1);
+        return;
+      }
+      if (online.connected) return; // the game itself is still running
+      leaveOnline();
+      showScreen("setup");
+      showOnlineError(`Couldn't create an online game. Check your internet connection and try again. (${err.type || "unknown error"})`);
+    });
+  }
+
+  function joinOnlineGame(rawCode) {
+    if (!peerAvailable()) return;
+    const code = String(rawCode || "").trim().toUpperCase();
+    if (!new RegExp(`^[${CODE_ALPHABET}]{${CODE_LENGTH}}$`).test(code)) {
+      showOnlineError(`Enter the ${CODE_LENGTH}-character code your friend shared.`);
+      return;
     }
+
+    const rejoining = !els.game.hidden;
+    leaveOnline();
+    showOnlineError("");
+    rememberName();
+    if (!rejoining) resetGameState();
+    online.role = "guest";
+    online.code = code;
+    els.footerMode.textContent = `Online · code ${code}`;
+    setBusy(true);
+    if (rejoining) {
+      els.status.textContent = "Reconnecting…";
+    }
+
+    const fail = (message) => {
+      leaveOnline();
+      showScreen("setup");
+      settings.mode = "online";
+      els.joinCode.value = code;
+      showOnlineError(message);
+    };
+
+    const peer = new Peer(PEER_OPTIONS);
+    online.peer = peer;
+
+    online.joinTimer = setTimeout(() => {
+      if (online.peer === peer && !online.connected) {
+        fail("Couldn't connect to that game. Check the code and make sure your friend is still on the waiting screen.");
+      }
+    }, JOIN_TIMEOUT_MS);
+
+    peer.on("open", () => {
+      if (online.peer !== peer) return;
+      const conn = peer.connect(PEER_PREFIX + code, { reliable: true });
+      attachConnection(conn);
+      conn.on("open", () => conn.send({ type: "hello", name: myOnlineName() }));
+    });
+
+    peer.on("error", (err) => {
+      if (online.peer !== peer || online.connected) return;
+      if (err.type === "peer-unavailable") {
+        fail(`No game found with code ${code}. Check the code and make sure your friend is still on the waiting screen.`);
+      } else {
+        fail(`Couldn't connect. Check your internet connection and try again. (${err.type || "unknown error"})`);
+      }
+    });
+  }
+
+  async function shareInvite() {
+    const url = inviteUrl();
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Tic Tac Toe", text: `Play tic tac toe with me! Code: ${online.code}`, url });
+        return;
+      } catch (err) {
+        if (err && err.name === "AbortError") return; // the player closed the share sheet
+      }
+    }
+    copyInvite();
   }
 
   async function copyInvite() {
@@ -599,38 +614,21 @@
       await navigator.clipboard.writeText(inviteUrl());
       els.copyBtn.textContent = "Copied!";
     } catch {
-      // Clipboard refused: select the link so it can be copied by hand.
-      const range = document.createRange();
-      range.selectNodeContents(els.inviteLink);
-      const sel = window.getSelection();
-      sel.removeAllRanges();
-      sel.addRange(range);
-      els.copyBtn.textContent = "Select and copy the link";
+      els.copyBtn.textContent = "Copy failed";
+      els.lobbyStatus.textContent = inviteUrl();
     }
-    setTimeout(() => { els.copyBtn.textContent = "Copy invite link"; }, 2000);
-  }
-
-  async function initOnline() {
-    if (!window.claude || typeof window.claude.use !== "function") return;
-    const [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
-    if (!db || !user) return;
-    const [myId, canWrite] = await Promise.all([user.id(), user.can("data.write")]);
-    if (!myId) return;
-    Object.assign(online, { db, user, myId, canWrite });
-    els.onlineModeBtn.hidden = false;
-
-    // An invite link ends in #CODE: open straight into that game.
-    const invited = location.hash.replace(/^#/, "").toUpperCase();
-    if (CODE_PATTERN.test(invited)) {
-      selectSegment("mode", "online");
-      els.joinCode.value = invited;
-      joinOnlineGame(invited);
-    }
+    setTimeout(() => { els.copyBtn.textContent = "Copy link"; }, 1800);
   }
 
   /* ---------- Setup controls ---------- */
 
-  const segmentHandlers = {};
+  function bindSegmented(attr, onChange) {
+    const buttons = $$(`[data-${attr}]`);
+    buttons.forEach((btn) => {
+      btn.addEventListener("click", () => selectSegment(attr, btn.dataset[attr]));
+    });
+    selectSegment.handlers[attr] = onChange;
+  }
 
   function selectSegment(attr, value) {
     $$(`[data-${attr}]`).forEach((b) => {
@@ -638,22 +636,16 @@
       b.classList.toggle("active", on);
       b.setAttribute("aria-checked", String(on));
     });
-    segmentHandlers[attr](value);
+    selectSegment.handlers[attr](value);
   }
-
-  function bindSegmented(attr, onChange) {
-    segmentHandlers[attr] = onChange;
-    $$(`[data-${attr}]`).forEach((btn) => {
-      btn.addEventListener("click", () => selectSegment(attr, btn.dataset[attr]));
-    });
-  }
+  selectSegment.handlers = {};
 
   bindSegmented("mode", (mode) => {
     settings.mode = mode;
     els.difficultyField.hidden = mode !== "bot";
     els.sideField.hidden = mode !== "bot";
     els.namesField.hidden = mode !== "friend";
-    els.onlineHint.hidden = mode !== "online";
+    els.onlineNameField.hidden = mode !== "online";
     els.joinField.hidden = mode !== "online";
     els.startBtn.textContent = mode === "online" ? "Create online game" : "Start game";
     showOnlineError("");
@@ -672,7 +664,7 @@
     cell.addEventListener("click", () => {
       if (isLocked()) return;
       const index = Number(cell.dataset.index);
-      if (isOnline()) playOnline(index);
+      if (isGuest()) send({ type: "move", index });
       else play(index);
     });
   });
@@ -682,24 +674,22 @@
     else startLocalGame();
   });
 
-  $("#restart-btn").addEventListener("click", () => {
-    if (isOnline()) newOnlineRound();
-    else newRound();
+  els.restartBtn.addEventListener("click", () => {
+    if (!isGuest()) newRound();
+    else if (online.connected) send({ type: "restart" });
+    else joinOnlineGame(online.code);
   });
 
   $("#reset-score-btn").addEventListener("click", () => {
-    if (isOnline()) {
-      writeGame({ scores: { X: 0, O: 0, draw: 0 } });
-    } else {
-      state.scores = { X: 0, O: 0, draw: 0 };
-      render();
-    }
+    if (isGuest()) send({ type: "reset" });
+    else resetScores();
   });
 
   $("#menu-btn").addEventListener("click", showMenu);
-  $("#cancel-btn").addEventListener("click", cancelLobby);
-  els.copyBtn.addEventListener("click", copyInvite);
+  $("#cancel-btn").addEventListener("click", showMenu);
   els.joinBtn.addEventListener("click", () => joinOnlineGame(els.joinCode.value));
+  els.shareBtn.addEventListener("click", shareInvite);
+  els.copyBtn.addEventListener("click", copyInvite);
 
   els.joinCode.addEventListener("input", () => {
     els.joinCode.value = els.joinCode.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -714,7 +704,16 @@
     });
   });
 
-  initOnline();
+  try { els.onlineName.value = localStorage.getItem("ttt-name") || ""; } catch { /* storage unavailable */ }
+
+  // An invite link (?join=CODE) opens straight into the online join form.
+  const invitedCode = new URLSearchParams(location.search).get("join");
+  if (invitedCode) {
+    selectSegment("mode", "online");
+    els.joinCode.value = invitedCode.toUpperCase().slice(0, CODE_LENGTH);
+    els.onlineError.hidden = true;
+    (els.onlineName.value ? els.joinBtn : els.onlineName).focus();
+  }
 
   /* ---------- Theme ---------- */
 

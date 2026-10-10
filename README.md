@@ -13,4 +13,6 @@ Includes a scoreboard, choice of X or O vs the bot, custom player names, and a l
 
 ### Online play
 
-When the game runs as its published Claude page, an **Online** mode appears: create a game, send the invite link, and your friend plays from their own phone. Moves are saved in the page's shared storage and update live on both devices. Only people the page is shared with can open it. The Online mode is hidden when the files are opened anywhere else.
+Choose **Online**, tap **Create online game** and share the invite link (or the 5-character code). Your friend opens the link on their own phone, with no account needed. The two devices connect directly to each other using [PeerJS](https://peerjs.com/), whose free public server only introduces them; moves never pass through or get stored on a server.
+
+The game is published with GitHub Pages at https://kenzo-code333.github.io/Tic-Tac-Toe-Game/. Anyone with that address can open the site, but each game is private to the two players who have its code. On iPhone, use Share → Add to Home Screen to get an app icon.

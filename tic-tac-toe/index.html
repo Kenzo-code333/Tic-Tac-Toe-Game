@@ -4,6 +4,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>Tic Tac Toe</title>
+  <meta name="description" content="Play tic tac toe against a bot, a friend on the same phone, or a friend online.">
+  <meta name="theme-color" content="#6366f1">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Tic Tac Toe">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" href="icon-192.png" type="image/png">
+  <link rel="manifest" href="manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -23,10 +32,10 @@
     <section class="card setup" id="setup-screen">
       <div class="field">
         <span class="field-label">Mode</span>
-        <div class="segmented modes" role="radiogroup" aria-label="Game mode">
+        <div class="segmented three" role="radiogroup" aria-label="Game mode">
           <button class="seg-btn active" data-mode="bot" role="radio" aria-checked="true">🤖 Bot</button>
           <button class="seg-btn" data-mode="friend" role="radio" aria-checked="false">👥 Same phone</button>
-          <button class="seg-btn" data-mode="online" role="radio" aria-checked="false" id="online-mode-btn" hidden>🌐 Online</button>
+          <button class="seg-btn" data-mode="online" role="radio" aria-checked="false">🌐 Online</button>
         </div>
       </div>
 
@@ -56,7 +65,10 @@
         </div>
       </div>
 
-      <p class="hint" id="online-hint" hidden>Create a game and send your friend the invite link. You'll each play on your own phone.</p>
+      <div class="field" id="online-name-field" hidden>
+        <label class="field-label" for="online-name">Your name</label>
+        <input class="text-input" id="online-name" type="text" maxlength="14" placeholder="Player" autocomplete="nickname">
+      </div>
 
       <button class="primary-btn" id="start-btn">Start game</button>
 
@@ -75,21 +87,18 @@
     <section class="card lobby" id="lobby-screen" hidden>
       <div class="lobby-head">
         <span class="pulse" aria-hidden="true"></span>
-        <p class="lobby-status">Waiting for your friend to join…</p>
+        <p class="lobby-status" id="lobby-status" aria-live="polite">Waiting for your friend to join…</p>
       </div>
       <div class="field">
         <span class="field-label">Game code</span>
         <p class="code" id="lobby-code">-----</p>
-      </div>
-      <div class="field">
-        <span class="field-label">Invite link</span>
-        <p class="invite-link" id="invite-link"></p>
-        <p class="hint">Send this link to your friend. They can also choose Online and type the code. Only people you've shared this page with can open it.</p>
+        <p class="hint">Send your friend the invite link, or have them choose Online and type this code.</p>
       </div>
       <div class="lobby-actions">
-        <button class="primary-btn" id="copy-btn">Copy invite link</button>
-        <button class="ghost-btn" id="cancel-btn">Cancel</button>
+        <button class="primary-btn" id="share-btn">Share invite link</button>
+        <button class="ghost-btn" id="copy-btn">Copy link</button>
       </div>
+      <button class="ghost-btn" id="cancel-btn">Cancel</button>
     </section>
 
     <!-- Game screen -->
@@ -138,6 +147,7 @@
     <footer class="footer" id="footer" hidden>Mode: <span id="footer-mode"></span></footer>
   </main>
 
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

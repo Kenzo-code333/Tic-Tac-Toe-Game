@@ -89,7 +89,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--x); outline
   background: var(--surface-2); padding: 4px; border-radius: 14px;
 }
 .segmented.three { grid-template-columns: repeat(3, 1fr); }
-.segmented.modes { grid-template-columns: none; grid-auto-flow: column; grid-auto-columns: 1fr; }
 .seg-btn {
   padding: 10px 6px; white-space: nowrap; border-radius: 10px; font-weight: 600; font-size: 0.92rem;
   color: var(--muted); transition: background 0.2s, color 0.2s, box-shadow 0.2s;
@@ -128,7 +127,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--x); outline
 
 /* Online lobby */
 .lobby-head { display: flex; align-items: center; gap: 10px; }
-.lobby-status { font-weight: 600; min-width: 0; }
+.lobby-status { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
 .pulse {
   flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--win);
   box-shadow: 0 0 0 0 var(--win); animation: pulse 1.6s ease-out infinite;
@@ -137,10 +136,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--x); outline
   font-size: clamp(2.2rem, 12vw, 3rem); font-weight: 800; letter-spacing: 0.25em;
   text-align: center; padding: 14px 0 14px 0.25em; border-radius: 14px;
   background: var(--surface-2); color: var(--x); font-variant-numeric: tabular-nums;
-}
-.invite-link {
-  padding: 10px 12px; border-radius: 12px; background: var(--surface-2);
-  font-size: 0.85rem; color: var(--text); overflow-wrap: anywhere;
   user-select: all; -webkit-user-select: all;
 }
 .lobby-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
