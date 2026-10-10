@@ -127,7 +127,10 @@
         </div>
       </div>
 
-      <p class="status" id="status" aria-live="polite">Your turn</p>
+      <div class="status-wrap">
+        <p class="status" id="status" aria-live="polite">Your turn</p>
+        <p class="cheer" id="cheer" aria-live="polite" hidden></p>
+      </div>
 
       <div class="board-wrap">
         <div class="board" id="board" role="grid" aria-label="Tic tac toe board">
@@ -154,7 +157,10 @@
     </section>
 
     <footer class="footer" id="footer" hidden>Mode: <span id="footer-mode"></span></footer>
+    <p class="credit">Made by Kenzo Gourven</p>
   </main>
+
+  <canvas class="confetti" id="confetti" aria-hidden="true"></canvas>
 
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="script.js"></script>

@@ -15,6 +15,18 @@
 
   const BOT_DELAY_MS = 450;
 
+  // Shown to whoever lost the round, one picked at random each time.
+  const CHEERS = [
+    "You'll get them next time! 💪",
+    "So close! Rematch? 🔁",
+    "Great game! Shake it off and go again 🙌",
+    "Every champion loses sometimes. The next round is yours! 🏆",
+    "Nice try! Your comeback starts now 🚀",
+    "Luck's on your side next time 🍀",
+    "That was just the warm-up. Now it's for real 😄",
+    "Chin up, you're one round away from a win! ⭐",
+  ];
+
   // Online play: the host's PeerJS id is this prefix plus the game code.
   const PEER_PREFIX = "kzttt-";
   const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
@@ -60,6 +72,8 @@
     scoreCardX: $("#score-card-x"),
     scoreCardO: $("#score-card-o"),
     winLine: $("#win-line"),
+    cheer: $("#cheer"),
+    confetti: $("#confetti"),
     winLinePath: $("#win-line-path"),
     restartBtn: $("#restart-btn"),
     footer: $("#footer"),
@@ -89,6 +103,7 @@
   };
 
   let shownWinKey = "";
+  let lastCheer = "";
 
   /* ---------- Game logic ---------- */
 
@@ -200,11 +215,20 @@
     const cell = els.cells[i];
     const value = state.board[i] || "";
     if (cell.dataset.mark === value) return; // unchanged; keep its animation state
+    const placed = Boolean(value) && !cell.dataset.mark; // a mark just went down here
     cell.dataset.mark = value;
     cell.className = "cell";
     cell.innerHTML = "";
     if (value) {
       cell.classList.add("filled", value.toLowerCase());
+      if (placed) {
+        cell.classList.add("placed");
+        const burst = document.createElement("i");
+        burst.className = "burst";
+        burst.setAttribute("aria-hidden", "true");
+        cell.appendChild(burst);
+        if (navigator.vibrate) navigator.vibrate(12);
+      }
       const span = document.createElement("span");
       span.textContent = value;
       cell.appendChild(span);
@@ -222,7 +246,7 @@
     }
     if (win) {
       if (settings.mode === "bot") {
-        return win.player === settings.humanSide ? "You win! 🎉" : "Bot wins. Try again!";
+        return win.player === settings.humanSide ? "You win! 🎉" : "Bot wins this round";
       }
       if (isOnline()) {
         return win.player === mySide() ? "You win! 🎉" : `${friendName()} wins this round`;
@@ -261,8 +285,13 @@
     const winKey = win ? win.line.join("") : "";
     if (winKey !== shownWinKey) {
       shownWinKey = winKey;
-      if (win) drawWinLine(win.line);
-      else els.winLine.classList.remove("show");
+      if (win) {
+        drawWinLine(win.line);
+        celebrate(win);
+      } else {
+        els.winLine.classList.remove("show");
+        els.cheer.hidden = true;
+      }
     }
 
     const youWon = win && (settings.mode === "friend" || win.player === (isOnline() ? mySide() : settings.humanSide));
@@ -285,6 +314,104 @@
     els.scoreCardO.classList.toggle("turn", !over && state.turn === "O");
 
     els.restartBtn.textContent = isGuest() && !online.connected ? "Reconnect" : "New round";
+  }
+
+  /* ---------- Win and loss effects ---------- */
+
+  // Which side this device cheers for. Same-phone games have no single
+  // loser on the device, so every win gets confetti there.
+  function localSide() {
+    if (settings.mode === "bot") return settings.humanSide;
+    if (isOnline()) return mySide();
+    return null;
+  }
+
+  function celebrate(win) {
+    const mine = localSide();
+    if (mine === null || win.player === mine) {
+      els.cheer.hidden = true;
+      launchConfetti();
+      return;
+    }
+    let message;
+    do { message = randomItem(CHEERS); } while (message === lastCheer && CHEERS.length > 1);
+    lastCheer = message;
+    els.cheer.textContent = message;
+    els.cheer.hidden = false;
+  }
+
+  function launchConfetti() {
+    if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const canvas = els.confetti;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    ctx.scale(dpr, dpr);
+
+    const styles = getComputedStyle(document.documentElement);
+    const colors = [styles.getPropertyValue("--x"), styles.getPropertyValue("--o"), styles.getPropertyValue("--win"), "#facc15", "#38bdf8"]
+      .map((c) => c.trim()).filter(Boolean);
+
+    // Two bursts, one from each bottom corner, aimed up and inwards.
+    const pieces = [];
+    for (let i = 0; i < 160; i++) {
+      const fromLeft = i % 2 === 0;
+      const angle = (fromLeft ? -60 : -120) * (Math.PI / 180) + (Math.random() - 0.5) * 0.9;
+      const speed = 9 + Math.random() * 9;
+      pieces.push({
+        x: fromLeft ? 0 : w,
+        y: h,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        size: 6 + Math.random() * 6,
+        color: colors[i % colors.length],
+        spin: Math.random() * Math.PI,
+        spinSpeed: (Math.random() - 0.5) * 0.3,
+        round: Math.random() < 0.3,
+      });
+    }
+
+    const started = performance.now();
+    const DURATION = 3200;
+    cancelAnimationFrame(launchConfetti.frame);
+    canvas.classList.add("show");
+
+    const tick = (now) => {
+      const t = now - started;
+      ctx.clearRect(0, 0, w, h);
+      ctx.globalAlpha = t > DURATION - 600 ? Math.max(0, (DURATION - t) / 600) : 1;
+      for (const p of pieces) {
+        p.vy += 0.28; // gravity
+        p.vx *= 0.99;
+        p.vy *= 0.99;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.spin += p.spinSpeed;
+        ctx.save();
+        ctx.translate(p.x, p.y);
+        ctx.rotate(p.spin);
+        ctx.fillStyle = p.color;
+        if (p.round) {
+          ctx.beginPath();
+          ctx.arc(0, 0, p.size / 2.4, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          ctx.fillRect(-p.size / 2, -p.size / 4, p.size, p.size / 2);
+        }
+        ctx.restore();
+      }
+      if (t < DURATION) {
+        launchConfetti.frame = requestAnimationFrame(tick);
+      } else {
+        ctx.clearRect(0, 0, w, h);
+        canvas.classList.remove("show");
+      }
+    };
+    launchConfetti.frame = requestAnimationFrame(tick);
   }
 
   /* ---------- Turn flow ---------- */

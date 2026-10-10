@@ -42,7 +42,7 @@ body {
   min-height: 100dvh;
   display: flex;
   justify-content: center;
-  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   -webkit-tap-highlight-color: transparent;
   transition: background-color 0.3s, color 0.3s;
 }
@@ -176,7 +176,19 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--x); outline
 .score-x .score-value { color: var(--x); }
 .score-o .score-value { color: var(--o); }
 
+.status-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
 .status { text-align: center; font-weight: 600; font-size: 1.05rem; min-height: 1.5em; }
+.cheer {
+  text-align: center; font-size: 0.95rem; font-weight: 500; color: var(--x);
+  background: var(--x-soft); padding: 6px 14px; border-radius: 999px;
+  animation: cheer-in 0.45s cubic-bezier(.34, 1.56, .64, 1);
+}
+.confetti { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 50; display: none; }
+.confetti.show { display: block; }
+.credit {
+  margin-top: auto; align-self: flex-end; padding-top: 8px;
+  font-size: 0.72rem; font-weight: 500; color: var(--muted); opacity: 0.8;
+}
 .status.win { color: var(--win); }
 
 .board-wrap { position: relative; aspect-ratio: 1; width: 100%; }
@@ -198,6 +210,25 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--x); outline
 .cell.x { color: var(--x); }
 .cell.o { color: var(--o); }
 .cell.filled span { animation: pop 0.28s cubic-bezier(.34, 1.56, .64, 1); }
+
+/* Placing a mark: the mark spins in, the box thumps and a ring of color bursts out */
+.cell.placed { animation: thump 0.32s ease-out; }
+.cell.placed span { animation: place 0.45s cubic-bezier(.34, 1.56, .64, 1); }
+.cell.x { --mark: var(--x); }
+.cell.o { --mark: var(--o); }
+.burst {
+  position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  border: 3px solid var(--mark); opacity: 0;
+  animation: burst 0.55s ease-out;
+}
+.burst::before, .burst::after {
+  content: ""; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px;
+  margin: -4px 0 0 -4px; border-radius: 50%; background: var(--mark);
+  box-shadow: 0 -34px 0 var(--mark), 30px -17px 0 var(--mark), 30px 17px 0 var(--mark),
+              0 34px 0 var(--mark), -30px 17px 0 var(--mark), -30px -17px 0 var(--mark);
+  animation: sparks 0.5s ease-out forwards;
+}
+.burst::after { animation-name: sparks-turned; animation-delay: 0.05s; opacity: 0; }
 .cell.win-cell.x { background: var(--x-soft); }
 .cell.win-cell.o { background: var(--o-soft); }
 .board.over .cell:not(.win-cell) { opacity: 0.55; }
@@ -218,6 +249,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--x); outline
 
 .footer { text-align: center; font-size: 0.8rem; color: var(--muted); }
 
+@keyframes place {
+  0% { transform: scale(0) rotate(-35deg); opacity: 0; }
+  60% { transform: scale(1.25) rotate(8deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); }
+}
+@keyframes thump { 0% { transform: scale(1); } 35% { transform: scale(0.9); } 100% { transform: scale(1); } }
+@keyframes burst { 0% { opacity: 0.9; transform: scale(0.85); } 100% { opacity: 0; transform: scale(1.18); } }
+@keyframes sparks { 0% { opacity: 1; transform: scale(0.3); } 100% { opacity: 0; transform: scale(1.35); } }
+@keyframes sparks-turned { 0% { opacity: 1; transform: rotate(30deg) scale(0.3); } 100% { opacity: 0; transform: rotate(30deg) scale(1.35); } }
+@keyframes cheer-in { from { opacity: 0; transform: translateY(6px) scale(0.92); } to { opacity: 1; transform: none; } }
 @keyframes pop { from { transform: scale(0.3); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 @keyframes rise { from { transform: translateY(8px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes draw { to { stroke-dashoffset: 0; } }
