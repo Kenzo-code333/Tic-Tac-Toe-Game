@@ -15,11 +15,20 @@
 
   const BOT_DELAY_MS = 450;
 
+  // Online play: the host's PeerJS id is this prefix plus the game code.
+  const PEER_PREFIX = "kzttt-";
+  const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  const CODE_LENGTH = 5;
+  const JOIN_TIMEOUT_MS = 15000;
+  // Tests can point PeerJS at a local server by defining window.TTT_PEER_OPTIONS.
+  const PEER_OPTIONS = window.TTT_PEER_OPTIONS || {};
+
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
   const els = {
     setup: $("#setup-screen"),
+    lobby: $("#lobby-screen"),
     game: $("#game-screen"),
     difficultyField: $("#difficulty-field"),
     difficultyHint: $("#difficulty-hint"),
@@ -27,6 +36,17 @@
     namesField: $("#names-field"),
     nameX: $("#name-x"),
     nameO: $("#name-o"),
+    onlineNameField: $("#online-name-field"),
+    onlineName: $("#online-name"),
+    joinField: $("#join-field"),
+    joinCode: $("#join-code"),
+    joinBtn: $("#join-btn"),
+    startBtn: $("#start-btn"),
+    onlineError: $("#online-error"),
+    lobbyCode: $("#lobby-code"),
+    lobbyStatus: $("#lobby-status"),
+    shareBtn: $("#share-btn"),
+    copyBtn: $("#copy-btn"),
     board: $("#board"),
     cells: $$(".cell"),
     status: $("#status"),
@@ -39,6 +59,7 @@
     scoreCardO: $("#score-card-o"),
     winLine: $("#win-line"),
     winLinePath: $("#win-line-path"),
+    restartBtn: $("#restart-btn"),
     footer: $("#footer"),
     footerMode: $("#footer-mode"),
   };
@@ -49,11 +70,23 @@
     board: Array(9).fill(null),
     turn: "X",
     starter: "X",
-    over: false,
     scores: { X: 0, O: 0, draw: 0 },
     names: { X: "You", O: "Bot" },
     botTimer: null,
   };
+
+  // The host is always X and holds the real game state; the guest is O and
+  // sends its moves to the host, which replies with the full state.
+  const online = {
+    peer: null,
+    conn: null,
+    role: null, // "host" | "guest"
+    code: "",
+    connected: false,
+    joinTimer: null,
+  };
+
+  let shownWinKey = "";
 
   /* ---------- Game logic ---------- */
 
@@ -70,6 +103,7 @@
   const emptyCells = (board) => board.reduce((acc, v, i) => (v ? acc : [...acc, i]), []);
   const other = (p) => (p === "X" ? "O" : "X");
   const randomItem = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const isOver = () => Boolean(getWinner(state.board)) || emptyCells(state.board).length === 0;
 
   // Returns a move that immediately wins for `player`, or -1.
   function findWinningMove(board, player) {
@@ -140,9 +174,31 @@
 
   /* ---------- Rendering ---------- */
 
+  const isOnline = () => settings.mode === "online";
+  const isGuest = () => isOnline() && online.role === "guest";
+  const mySide = () => (online.role === "guest" ? "O" : "X");
+  const friendName = () => state.names[other(mySide())] || "Friend";
+
+  function isBotTurn() {
+    return settings.mode === "bot" && state.turn !== settings.humanSide;
+  }
+
+  function isLocked() {
+    if (isOver() || isBotTurn()) return true;
+    if (isOnline()) return !online.connected || state.turn !== mySide();
+    return false;
+  }
+
+  function displayName(side) {
+    if (isOnline()) return side === mySide() ? "You" : friendName();
+    return state.names[side];
+  }
+
   function renderCell(i) {
     const cell = els.cells[i];
-    const value = state.board[i];
+    const value = state.board[i] || "";
+    if (cell.dataset.mark === value) return; // unchanged; keep its animation state
+    cell.dataset.mark = value;
     cell.className = "cell";
     cell.innerHTML = "";
     if (value) {
@@ -156,39 +212,25 @@
     }
   }
 
-  function isBotTurn() {
-    return settings.mode === "bot" && state.turn !== settings.humanSide;
-  }
-
-  function updateInteractivity() {
-    const locked = state.over || isBotTurn();
-    els.cells.forEach((cell, i) => {
-      cell.disabled = locked || Boolean(state.board[i]);
-    });
-    els.board.dataset.turn = locked ? "" : state.turn;
-    els.board.classList.toggle("over", state.over);
-    els.scoreCardX.classList.toggle("turn", !state.over && state.turn === "X");
-    els.scoreCardO.classList.toggle("turn", !state.over && state.turn === "O");
-  }
-
-  function setStatus(text, isWin = false) {
-    els.status.textContent = text;
-    els.status.classList.toggle("win", isWin);
-  }
-
-  function turnStatus() {
-    if (settings.mode === "bot") {
-      return isBotTurn() ? "Bot is thinking…" : "Your turn";
+  function statusText(win) {
+    if (isOnline() && !online.connected) {
+      return online.role === "host"
+        ? `${friendName()} disconnected. Waiting for them to rejoin…`
+        : "Connection lost. Tap Reconnect to rejoin.";
     }
+    if (win) {
+      if (settings.mode === "bot") {
+        return win.player === settings.humanSide ? "You win! 🎉" : "Bot wins. Try again!";
+      }
+      if (isOnline()) {
+        return win.player === mySide() ? "You win! 🎉" : `${friendName()} wins this round`;
+      }
+      return `${state.names[win.player]} wins! 🎉`;
+    }
+    if (emptyCells(state.board).length === 0) return "It's a draw 🤝";
+    if (settings.mode === "bot") return isBotTurn() ? "Bot is thinking…" : "Your turn";
+    if (isOnline()) return state.turn === mySide() ? "Your turn" : `Waiting for ${friendName()}…`;
     return `${state.names[state.turn]}'s turn (${state.turn})`;
-  }
-
-  function renderScores() {
-    els.scoreX.textContent = state.scores.X;
-    els.scoreO.textContent = state.scores.O;
-    els.scoreDraw.textContent = state.scores.draw;
-    els.scoreNameX.textContent = `${state.names.X} (X)`;
-    els.scoreNameO.textContent = `${state.names.O} (O)`;
   }
 
   function drawWinLine(line) {
@@ -207,45 +249,66 @@
     els.winLine.classList.add("show");
   }
 
-  /* ---------- Turn flow ---------- */
-
-  function play(index) {
-    if (state.over || state.board[index]) return;
-
-    state.board[index] = state.turn;
-    renderCell(index);
-
+  function render() {
     const win = getWinner(state.board);
-    if (win) {
-      state.over = true;
-      state.scores[win.player] += 1;
-      win.line.forEach((i) => els.cells[i].classList.add("win-cell"));
-      drawWinLine(win.line);
-      if (settings.mode === "bot") {
-        setStatus(win.player === settings.humanSide ? "You win! 🎉" : "Bot wins. Try again!", win.player === settings.humanSide);
-      } else {
-        setStatus(`${state.names[win.player]} wins! 🎉`, true);
-      }
-    } else if (emptyCells(state.board).length === 0) {
-      state.over = true;
-      state.scores.draw += 1;
-      setStatus("It's a draw 🤝");
-    } else {
-      state.turn = other(state.turn);
-      setStatus(turnStatus());
+    const over = isOver();
+
+    els.cells.forEach((_, i) => renderCell(i));
+    els.cells.forEach((cell, i) => cell.classList.toggle("win-cell", Boolean(win && win.line.includes(i))));
+
+    const winKey = win ? win.line.join("") : "";
+    if (winKey !== shownWinKey) {
+      shownWinKey = winKey;
+      if (win) drawWinLine(win.line);
+      else els.winLine.classList.remove("show");
     }
 
-    renderScores();
-    updateInteractivity();
+    const youWon = win && (settings.mode === "friend" || win.player === (isOnline() ? mySide() : settings.humanSide));
+    els.status.textContent = statusText(win);
+    els.status.classList.toggle("win", Boolean(youWon));
+
+    els.scoreX.textContent = state.scores.X;
+    els.scoreO.textContent = state.scores.O;
+    els.scoreDraw.textContent = state.scores.draw;
+    els.scoreNameX.textContent = `${displayName("X")} (X)`;
+    els.scoreNameO.textContent = `${displayName("O")} (O)`;
+
+    const locked = isLocked();
+    els.cells.forEach((cell, i) => {
+      cell.disabled = locked || Boolean(state.board[i]);
+    });
+    els.board.dataset.turn = locked ? "" : state.turn;
+    els.board.classList.toggle("over", over);
+    els.scoreCardX.classList.toggle("turn", !over && state.turn === "X");
+    els.scoreCardO.classList.toggle("turn", !over && state.turn === "O");
+
+    els.restartBtn.textContent = isGuest() && !online.connected ? "Reconnect" : "New round";
+  }
+
+  /* ---------- Turn flow ---------- */
+
+  // Applies a move to the local state. Runs on this device for bot and
+  // same-phone games, and on the host for online games.
+  function play(index) {
+    if (isOver() || state.board[index]) return;
+
+    state.board[index] = state.turn;
+    const win = getWinner(state.board);
+    if (win) state.scores[win.player] += 1;
+    else if (emptyCells(state.board).length === 0) state.scores.draw += 1;
+    else state.turn = other(state.turn);
+
+    render();
+    sendState();
     maybeBotMove();
   }
 
   function maybeBotMove() {
-    if (state.over || !isBotTurn()) return;
+    if (isOver() || !isBotTurn()) return;
     clearTimeout(state.botTimer);
     state.botTimer = setTimeout(() => {
       state.botTimer = null;
-      if (state.over || !isBotTurn()) return;
+      if (isOver() || !isBotTurn()) return;
       play(chooseBotMove(state.board, state.turn, settings.difficulty));
     }, BOT_DELAY_MS);
   }
@@ -254,19 +317,41 @@
     clearTimeout(state.botTimer);
     state.botTimer = null;
     state.board = Array(9).fill(null);
-    state.over = false;
-    // In friend mode the starting player alternates each round; vs bot, X always opens.
-    state.turn = settings.mode === "friend" ? state.starter : "X";
-    if (settings.mode === "friend") state.starter = other(state.starter);
-
-    els.winLine.classList.remove("show");
-    els.cells.forEach((_, i) => renderCell(i));
-    setStatus(turnStatus());
-    updateInteractivity();
+    // With two people the starting player alternates each round; vs bot, X always opens.
+    if (settings.mode === "bot") {
+      state.turn = "X";
+    } else {
+      state.turn = state.starter;
+      state.starter = other(state.starter);
+    }
+    render();
+    sendState();
     maybeBotMove();
   }
 
-  function startGame() {
+  function resetScores() {
+    state.scores = { X: 0, O: 0, draw: 0 };
+    render();
+    sendState();
+  }
+
+  function resetGameState() {
+    clearTimeout(state.botTimer);
+    state.botTimer = null;
+    state.scores = { X: 0, O: 0, draw: 0 };
+    state.starter = "X";
+    state.board = Array(9).fill(null);
+    state.turn = "X";
+  }
+
+  function showScreen(screen) {
+    els.setup.hidden = screen !== "setup";
+    els.lobby.hidden = screen !== "lobby";
+    els.game.hidden = screen !== "game";
+    els.footer.hidden = screen !== "game";
+  }
+
+  function startLocalGame() {
     if (settings.mode === "bot") {
       state.names[settings.humanSide] = "You";
       state.names[other(settings.humanSide)] = "Bot";
@@ -275,24 +360,264 @@
     } else {
       state.names.X = els.nameX.value.trim() || "Player 1";
       state.names.O = els.nameO.value.trim() || "Player 2";
-      els.footerMode.textContent = "vs Friend";
+      els.footerMode.textContent = "Same phone";
     }
-    state.scores = { X: 0, O: 0, draw: 0 };
-    state.starter = "X";
-    renderScores();
-
-    els.setup.hidden = true;
-    els.game.hidden = false;
-    els.footer.hidden = false;
+    resetGameState();
+    showScreen("game");
     newRound();
   }
 
   function showMenu() {
+    leaveOnline();
     clearTimeout(state.botTimer);
     state.botTimer = null;
-    els.game.hidden = true;
-    els.setup.hidden = false;
-    els.footer.hidden = true;
+    showScreen("setup");
+  }
+
+  /* ---------- Online play ---------- */
+
+  const cleanName = (name) => String(name || "").trim().slice(0, 14);
+  const myOnlineName = () => cleanName(els.onlineName.value) || "Player";
+  const inviteUrl = () => `${location.origin}${location.pathname}?join=${online.code}`;
+
+  function randomCode() {
+    let code = "";
+    for (let i = 0; i < CODE_LENGTH; i++) code += randomItem(CODE_ALPHABET.split(""));
+    return code;
+  }
+
+  function showOnlineError(message) {
+    els.onlineError.textContent = message;
+    els.onlineError.hidden = !message;
+  }
+
+  function setBusy(busy) {
+    els.startBtn.disabled = busy;
+    els.joinBtn.disabled = busy;
+    els.joinBtn.textContent = busy && online.role === "guest" ? "Joining…" : "Join";
+  }
+
+  function rememberName() {
+    try { localStorage.setItem("ttt-name", els.onlineName.value.trim()); } catch { /* storage unavailable */ }
+  }
+
+  function peerAvailable() {
+    if (typeof window.Peer === "function") return true;
+    showOnlineError("Online play couldn't load. Check your internet connection and reload the page.");
+    return false;
+  }
+
+  function sendState() {
+    if (!isOnline() || online.role !== "host" || !online.conn || !online.conn.open) return;
+    online.conn.send({
+      type: "state",
+      board: state.board,
+      turn: state.turn,
+      starter: state.starter,
+      scores: state.scores,
+      names: state.names,
+    });
+  }
+
+  function send(message) {
+    if (online.conn && online.conn.open) online.conn.send(message);
+  }
+
+  function leaveOnline() {
+    clearTimeout(online.joinTimer);
+    const { peer } = online;
+    online.peer = null;
+    online.conn = null;
+    online.role = null;
+    online.connected = false;
+    if (peer) peer.destroy();
+    setBusy(false);
+  }
+
+  function attachConnection(conn) {
+    online.conn = conn;
+    conn.on("data", (msg) => handleMessage(conn, msg));
+    const onClose = () => {
+      if (online.conn !== conn) return; // an older connection we already replaced
+      online.conn = null;
+      online.connected = false;
+      if (!els.game.hidden) render();
+    };
+    conn.on("close", onClose);
+    conn.on("error", onClose);
+  }
+
+  function handleMessage(conn, msg) {
+    if (!msg || typeof msg !== "object" || conn !== online.conn) return;
+
+    if (online.role === "host") {
+      if (msg.type === "hello") {
+        state.names.O = cleanName(msg.name) || "Friend";
+        online.connected = true;
+        showScreen("game");
+        render();
+        sendState();
+      } else if (msg.type === "move") {
+        const index = Number(msg.index);
+        if (state.turn === "O" && Number.isInteger(index) && index >= 0 && index < 9) play(index);
+      } else if (msg.type === "restart") {
+        newRound();
+      } else if (msg.type === "reset") {
+        resetScores();
+      }
+      return;
+    }
+
+    if (msg.type === "state" && Array.isArray(msg.board) && msg.board.length === 9) {
+      clearTimeout(online.joinTimer);
+      state.board = msg.board.map((v) => (v === "X" || v === "O" ? v : null));
+      state.turn = msg.turn === "O" ? "O" : "X";
+      state.starter = msg.starter === "O" ? "O" : "X";
+      const s = msg.scores || {};
+      state.scores = { X: Number(s.X) || 0, O: Number(s.O) || 0, draw: Number(s.draw) || 0 };
+      state.names = { X: cleanName(msg.names && msg.names.X) || "Friend", O: myOnlineName() };
+      online.connected = true;
+      setBusy(false);
+      showScreen("game");
+      render();
+    } else if (msg.type === "full") {
+      leaveOnline();
+      showScreen("setup");
+      showOnlineError("That game already has two players.");
+    }
+  }
+
+  function createOnlineGame(attempt = 1) {
+    if (!peerAvailable()) return;
+    leaveOnline();
+    showOnlineError("");
+    rememberName();
+    resetGameState();
+    state.starter = "O"; // X opens the first round, then the opener alternates
+    state.names = { X: myOnlineName(), O: "Friend" };
+    online.role = "host";
+    online.code = randomCode();
+    setBusy(true);
+
+    const peer = new Peer(PEER_PREFIX + online.code, PEER_OPTIONS);
+    online.peer = peer;
+
+    peer.on("open", () => {
+      if (online.peer !== peer) return;
+      setBusy(false);
+      els.lobbyCode.textContent = online.code;
+      els.lobbyStatus.textContent = "Waiting for your friend to join…";
+      els.footerMode.textContent = `Online · code ${online.code}`;
+      showScreen("lobby");
+    });
+
+    peer.on("connection", (conn) => {
+      if (online.peer !== peer) return;
+      if (online.conn && online.conn.open) {
+        conn.on("open", () => {
+          conn.send({ type: "full" });
+          setTimeout(() => conn.close(), 500);
+        });
+        return;
+      }
+      attachConnection(conn); // first join, or the guest coming back after a drop
+    });
+
+    // Losing the matchmaking server doesn't end a game in progress; reconnect quietly.
+    peer.on("disconnected", () => {
+      if (online.peer === peer && !peer.destroyed) peer.reconnect();
+    });
+
+    peer.on("error", (err) => {
+      if (online.peer !== peer) return;
+      if (err.type === "unavailable-id" && attempt < 3) {
+        createOnlineGame(attempt + 1);
+        return;
+      }
+      if (online.connected) return; // the game itself is still running
+      leaveOnline();
+      showScreen("setup");
+      showOnlineError("Couldn't create an online game. Check your internet connection and try again.");
+    });
+  }
+
+  function joinOnlineGame(rawCode) {
+    if (!peerAvailable()) return;
+    const code = String(rawCode || "").trim().toUpperCase();
+    if (!new RegExp(`^[${CODE_ALPHABET}]{${CODE_LENGTH}}$`).test(code)) {
+      showOnlineError(`Enter the ${CODE_LENGTH}-character code your friend shared.`);
+      return;
+    }
+
+    const rejoining = !els.game.hidden;
+    leaveOnline();
+    showOnlineError("");
+    rememberName();
+    if (!rejoining) resetGameState();
+    online.role = "guest";
+    online.code = code;
+    els.footerMode.textContent = `Online · code ${code}`;
+    setBusy(true);
+    if (rejoining) {
+      els.status.textContent = "Reconnecting…";
+    }
+
+    const fail = (message) => {
+      leaveOnline();
+      showScreen("setup");
+      settings.mode = "online";
+      els.joinCode.value = code;
+      showOnlineError(message);
+    };
+
+    const peer = new Peer(PEER_OPTIONS);
+    online.peer = peer;
+
+    online.joinTimer = setTimeout(() => {
+      if (online.peer === peer && !online.connected) {
+        fail("Couldn't connect to that game. Check the code and make sure your friend is still on the waiting screen.");
+      }
+    }, JOIN_TIMEOUT_MS);
+
+    peer.on("open", () => {
+      if (online.peer !== peer) return;
+      const conn = peer.connect(PEER_PREFIX + code, { reliable: true });
+      attachConnection(conn);
+      conn.on("open", () => conn.send({ type: "hello", name: myOnlineName() }));
+    });
+
+    peer.on("error", (err) => {
+      if (online.peer !== peer || online.connected) return;
+      if (err.type === "peer-unavailable") {
+        fail(`No game found with code ${code}. Check the code and make sure your friend is still on the waiting screen.`);
+      } else {
+        fail("Couldn't connect. Check your internet connection and try again.");
+      }
+    });
+  }
+
+  async function shareInvite() {
+    const url = inviteUrl();
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Tic Tac Toe", text: `Play tic tac toe with me! Code: ${online.code}`, url });
+        return;
+      } catch (err) {
+        if (err && err.name === "AbortError") return; // the player closed the share sheet
+      }
+    }
+    copyInvite();
+  }
+
+  async function copyInvite() {
+    try {
+      await navigator.clipboard.writeText(inviteUrl());
+      els.copyBtn.textContent = "Copied!";
+    } catch {
+      els.copyBtn.textContent = "Copy failed";
+      els.lobbyStatus.textContent = inviteUrl();
+    }
+    setTimeout(() => { els.copyBtn.textContent = "Copy link"; }, 1800);
   }
 
   /* ---------- Setup controls ---------- */
@@ -300,22 +625,30 @@
   function bindSegmented(attr, onChange) {
     const buttons = $$(`[data-${attr}]`);
     buttons.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        buttons.forEach((b) => {
-          b.classList.toggle("active", b === btn);
-          b.setAttribute("aria-checked", String(b === btn));
-        });
-        onChange(btn.dataset[attr]);
-      });
+      btn.addEventListener("click", () => selectSegment(attr, btn.dataset[attr]));
     });
+    selectSegment.handlers[attr] = onChange;
   }
+
+  function selectSegment(attr, value) {
+    $$(`[data-${attr}]`).forEach((b) => {
+      const on = b.dataset[attr] === value;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-checked", String(on));
+    });
+    selectSegment.handlers[attr](value);
+  }
+  selectSegment.handlers = {};
 
   bindSegmented("mode", (mode) => {
     settings.mode = mode;
-    const vsBot = mode === "bot";
-    els.difficultyField.hidden = !vsBot;
-    els.sideField.hidden = !vsBot;
-    els.namesField.hidden = vsBot;
+    els.difficultyField.hidden = mode !== "bot";
+    els.sideField.hidden = mode !== "bot";
+    els.namesField.hidden = mode !== "friend";
+    els.onlineNameField.hidden = mode !== "online";
+    els.joinField.hidden = mode !== "online";
+    els.startBtn.textContent = mode === "online" ? "Create online game" : "Start game";
+    showOnlineError("");
   });
 
   bindSegmented("difficulty", (difficulty) => {
@@ -329,24 +662,58 @@
 
   els.cells.forEach((cell) => {
     cell.addEventListener("click", () => {
-      if (isBotTurn()) return;
-      play(Number(cell.dataset.index));
+      if (isLocked()) return;
+      const index = Number(cell.dataset.index);
+      if (isGuest()) send({ type: "move", index });
+      else play(index);
     });
   });
 
-  $("#start-btn").addEventListener("click", startGame);
-  $("#restart-btn").addEventListener("click", newRound);
-  $("#menu-btn").addEventListener("click", showMenu);
+  els.startBtn.addEventListener("click", () => {
+    if (settings.mode === "online") createOnlineGame();
+    else startLocalGame();
+  });
+
+  els.restartBtn.addEventListener("click", () => {
+    if (!isGuest()) newRound();
+    else if (online.connected) send({ type: "restart" });
+    else joinOnlineGame(online.code);
+  });
+
   $("#reset-score-btn").addEventListener("click", () => {
-    state.scores = { X: 0, O: 0, draw: 0 };
-    renderScores();
+    if (isGuest()) send({ type: "reset" });
+    else resetScores();
+  });
+
+  $("#menu-btn").addEventListener("click", showMenu);
+  $("#cancel-btn").addEventListener("click", showMenu);
+  els.joinBtn.addEventListener("click", () => joinOnlineGame(els.joinCode.value));
+  els.shareBtn.addEventListener("click", shareInvite);
+  els.copyBtn.addEventListener("click", copyInvite);
+
+  els.joinCode.addEventListener("input", () => {
+    els.joinCode.value = els.joinCode.value.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  });
+  els.joinCode.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") joinOnlineGame(els.joinCode.value);
   });
 
   [els.nameX, els.nameO].forEach((input) => {
     input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") startGame();
+      if (e.key === "Enter") startLocalGame();
     });
   });
+
+  try { els.onlineName.value = localStorage.getItem("ttt-name") || ""; } catch { /* storage unavailable */ }
+
+  // An invite link (?join=CODE) opens straight into the online join form.
+  const invitedCode = new URLSearchParams(location.search).get("join");
+  if (invitedCode) {
+    selectSegment("mode", "online");
+    els.joinCode.value = invitedCode.toUpperCase().slice(0, CODE_LENGTH);
+    els.onlineError.hidden = true;
+    (els.onlineName.value ? els.joinBtn : els.onlineName).focus();
+  }
 
   /* ---------- Theme ---------- */
 
