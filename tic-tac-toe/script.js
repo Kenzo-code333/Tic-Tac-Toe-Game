@@ -76,6 +76,7 @@
     db: null,
     user: null,
     myId: null,
+    canWrite: null, // false when this viewer may only look, not play
     code: "",
     ref: null,
     unsubscribe: null,
@@ -376,6 +377,34 @@
     els.joinBtn.textContent = label || "Join";
   }
 
+  const NO_ACCESS = "You need Editor access to play online. Ask the person who shared this page with you to change your access to Editor.";
+
+  // Turns a storage refusal into a message that says what to do about it.
+  function describeError(err, fallback) {
+    const code = err && (err.reason || err.code);
+    switch (code) {
+      case "invalid_argument":
+      case "not_granted":
+      case "transform_error":
+        return NO_ACCESS;
+      case "revoked":
+        return "Your access to this page changed. Reload the page and try again.";
+      case "resource_exhausted":
+        return "Too many tries in a short time. Wait a few seconds and try again.";
+      case "quota_exceeded":
+        return "The game storage is full. Ask the page owner to clear old games.";
+      case "unavailable":
+        return "Couldn't reach the game storage. Wait a moment and try again.";
+      case "capability_disabled":
+      case "capability_removed":
+        return "Online play isn't available in this app. Open the invite link in Safari or Chrome instead.";
+      default:
+        return `${fallback} (${code || "unknown error"})`;
+    }
+  }
+
+  const fail = (reason) => Object.assign(new Error(reason), { reason });
+
   // Writes to the game document go one at a time, in order.
   function writeGame(fields) {
     const ref = online.ref;
@@ -383,9 +412,7 @@
       .then(() => ref && ref.update(fields))
       .catch((err) => {
         if (online.ref !== ref) return;
-        els.status.textContent = err && err.code === "invalid_argument"
-          ? "You don't have permission to play online. Ask the owner to share this page with you as an Editor."
-          : "Couldn't save that move. Check your connection and try again.";
+        els.status.textContent = describeError(err, "Couldn't save that move. Try again.");
       });
     return online.writing;
   }
@@ -463,6 +490,10 @@
   async function createOnlineGame() {
     leaveOnline();
     showOnlineError("");
+    if (online.canWrite === false) {
+      showOnlineError(NO_ACCESS);
+      return;
+    }
     setBusy(true);
     try {
       let code = randomCode();
@@ -480,9 +511,7 @@
       showScreen("lobby");
     } catch (err) {
       setBusy(false);
-      showOnlineError(err && err.code === "invalid_argument"
-        ? "You can't create online games on this page. Ask the owner to share it with you as an Editor."
-        : "Couldn't create a game. Check your connection and try again.");
+      showOnlineError(describeError(err, "Couldn't create a game. Try again."));
     }
   }
 
@@ -494,21 +523,26 @@
     }
     leaveOnline();
     showOnlineError("");
+    if (online.canWrite === false) {
+      showOnlineError(NO_ACCESS);
+      return;
+    }
     setBusy(true, "Joining…");
     try {
       const ref = online.db.doc(`games/${code}`);
       let snap = await ref.get();
-      if (!snap.exists) throw new Error("not_found");
+      if (!snap.exists) throw fail("not_found");
       let players = snap.data().players || {};
 
       if (players.X !== online.myId && players.O !== online.myId) {
-        if (players.O) throw new Error("full");
+        if (players.O) throw fail("full");
         // Claim the O seat under a short lease so two people can't both take it.
-        const lease = await ref.acquire({ holder: online.myId, ttlMs: 5000 });
-        if (!lease.acquired) throw new Error("full");
+        // If the lease itself is refused, claim without it: a clash is very unlikely.
+        const lease = await ref.acquire({ holder: online.myId, ttlMs: 5000 }).catch(() => ({ acquired: true }));
+        if (!lease.acquired) throw fail("full");
         snap = await ref.get();
         players = (snap.exists && snap.data().players) || {};
-        if (players.O && players.O !== online.myId) throw new Error("full");
+        if (players.O && players.O !== online.myId) throw fail("full");
         await ref.update({ players: { O: online.myId } });
         players = { ...players, O: online.myId };
       }
@@ -517,12 +551,11 @@
       watchGame(code, players.X === online.myId ? "X" : "O");
     } catch (err) {
       setBusy(false);
-      const reason = err && (err.message || err.code);
+      const reason = err && err.reason;
       showOnlineError(
-        reason === "not_found" ? `No game found with code ${code}. Check the code with your friend.`
+        reason === "not_found" ? `No game found with code ${code}. Check the code with your friend, and make sure their game is still on the waiting screen.`
           : reason === "full" ? "That game already has two players."
-            : reason === "invalid_argument" ? "You can't join online games on this page. Ask the owner to share it with you as an Editor."
-              : "Couldn't join. Check your connection and try again.",
+            : describeError(err, "Couldn't join. Try again."),
       );
     }
   }
@@ -581,9 +614,9 @@
     if (!window.claude || typeof window.claude.use !== "function") return;
     const [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
     if (!db || !user) return;
-    const myId = await user.id();
+    const [myId, canWrite] = await Promise.all([user.id(), user.can("data.write")]);
     if (!myId) return;
-    Object.assign(online, { db, user, myId });
+    Object.assign(online, { db, user, myId, canWrite });
     els.onlineModeBtn.hidden = false;
 
     // An invite link ends in #CODE: open straight into that game.
