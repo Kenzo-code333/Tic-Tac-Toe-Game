@@ -1,0 +1,15 @@
+Copyright (c) 2026 Kenzo Gourven. All rights reserved.
+
+This repository and everything in it, including the Tic Tac Toe game's
+code, design, graphics and text, are the property of Kenzo Gourven.
+
+You may view the code and play the game at
+https://kenzo-code333.github.io/Tic-Tac-Toe-Game/.
+
+You may not copy, modify, publish, distribute, sublicense or sell any part
+of this repository, in whole or in part, without written permission from
+Kenzo Gourven.
+
+The game loads the PeerJS library (https://peerjs.com/), which is
+third-party software under its own MIT license and is not covered by
+this notice.

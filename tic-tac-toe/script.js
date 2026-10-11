@@ -1,3 +1,8 @@
+/*
+ * Tic Tac Toe
+ * Copyright (c) 2026 Kenzo Gourven. All rights reserved.
+ * See the LICENSE file in the repository root.
+ */
 (() => {
   "use strict";
 
