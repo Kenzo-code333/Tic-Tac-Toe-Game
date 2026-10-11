@@ -1,2 +1,2 @@
-# simple-calculator
-A simple calculator built with HTML, CSS, and JavaScript
+# Tic Tac Toe Game
+A Tic Tac Toe Game built with HTML, CSS, and JavaScript
